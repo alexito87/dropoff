@@ -1,15 +1,26 @@
 
 import { Link } from 'react-router-dom'
+import { useAuth } from '../../state/AuthContext'
 
 export default function Sidebar() {
+  const { user, isAuthenticated } = useAuth()
+
   return (
     <aside className="sidebar">
       <h2>Навигация</h2>
+
       <nav className="nav-list">
         <Link to="/">Каталог</Link>
-        <Link to="/profile">Профиль</Link>
-        <Link to="/my-items">Мои объявления</Link>
-        <Link to="/admin/moderation">Модерация</Link>
+
+        {isAuthenticated && (
+          <>
+            <Link to="/profile">Профиль</Link>
+            <Link to="/my-items">Мои объявления</Link>
+            <Link to="/notifications">Уведомления</Link>
+          </>
+        )}
+
+        {user?.is_superuser && <Link to="/admin/moderation">Модерация</Link>}
       </nav>
     </aside>
   )

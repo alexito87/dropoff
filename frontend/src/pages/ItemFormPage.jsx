@@ -29,6 +29,7 @@ export default function ItemFormPage() {
   const [uploadErrors, setUploadErrors] = useState([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [itemStatus, setItemStatus] = useState('draft')
 
   useEffect(() => {
     async function bootstrap() {
@@ -47,6 +48,7 @@ export default function ItemFormPage() {
           pickup_address: item.pickup_address,
         })
         setImages(item.images || [])
+        setItemStatus(item.status)
       }
     }
 
@@ -54,6 +56,7 @@ export default function ItemFormPage() {
   }, [isEdit, itemId])
 
   const remainingSlots = useMemo(() => Math.max(MAX_FILES - images.length, 0), [images.length])
+  const isEditable = itemStatus === 'draft' || itemStatus === 'rejected'
 
   function updateField(name, value) {
     setForm((prev) => ({ ...prev, [name]: value }))
@@ -68,13 +71,37 @@ export default function ItemFormPage() {
     try {
       if (isEdit) {
         await apiPatch(`/api/v1/items/${itemId}`, form, true)
-        setMessage('Изменения сохранены')
+
+        if (!images.length) {
+          setMessage('Черновик сохранён. Добавьте хотя бы одно фото и нажмите «Сохранить объявление» ещё раз для отправки на модерацию.')
+          return
+        }
+
+        await apiPost(`/api/v1/items/${itemId}/submit-for-moderation`, {}, true)
+        setMessage('Объявление отправлено на модерацию')
+        navigate('/my-items')
       } else {
         const created = await apiPost('/api/v1/items', form, true)
-        navigate(`/my-items/${created.id}/edit`)
+        navigate(`/my-items/${created.id}/edit`, {
+          state: {
+            successMessage:
+              'Черновик сохранён. Добавьте хотя бы одно фото и нажмите «Сохранить объявление» ещё раз для отправки на модерацию.',
+          },
+        })
       }
     } catch (e) {
-      setError(e.message)
+      const normalized = String(e.message || '')
+      if (
+        normalized.includes('Field required') ||
+        normalized.includes('Input should') ||
+        normalized.includes('valid')
+      ) {
+        setError('Для добавления объявления заполните обязательные поля')
+      } else if (normalized.includes('At least one image is required')) {
+        setError('Добавьте хотя бы одно изображение')
+      } else {
+        setError(normalized)
+      }
     } finally {
       setSaving(false)
     }
@@ -82,7 +109,7 @@ export default function ItemFormPage() {
 
   async function handleFilesSelected(fileList) {
     const files = Array.from(fileList || [])
-    if (!files.length || !itemId) return
+    if (!files.length || !itemId || !isEditable) return
 
     setUploadErrors([])
     setMessage('')
@@ -93,7 +120,7 @@ export default function ItemFormPage() {
 
     for (const file of files.slice(0, remainingSlots)) {
       if (!ACCEPTED_TYPES.includes(file.type)) {
-        currentErrors.push(`${file.name}: неподдерживаемый формат`) 
+        currentErrors.push(`${file.name}: неподдерживаемый формат`)
         continue
       }
       if (file.size > MAX_FILE_SIZE) {
@@ -131,6 +158,8 @@ export default function ItemFormPage() {
   }
 
   async function handleDeleteImage(imageId) {
+    if (!isEditable) return
+
     setError('')
     setMessage('')
     try {
@@ -146,12 +175,20 @@ export default function ItemFormPage() {
       <div className="page-header-row">
         <div>
           <h1>{isEdit ? 'Редактировать объявление' : 'Создать объявление'}</h1>
-          <p className="muted">Пока сохраняем объявление как черновик. Изображения добавляются на этом же экране.</p>
+          <p className="muted">
+            После сохранения объявление отправляется на модерацию, если заполнены обязательные поля и добавлено хотя бы одно фото.
+          </p>
         </div>
         <button className="button ghost" type="button" onClick={() => navigate('/my-items')}>
           Назад к списку
         </button>
       </div>
+
+      {!isEditable && (
+        <div className="alert">
+          Это объявление нельзя редактировать в текущем статусе: {itemStatus}
+        </div>
+      )}
 
       <form className="card item-form-card" onSubmit={handleSave}>
         <label>
@@ -160,66 +197,118 @@ export default function ItemFormPage() {
             value={form.category_id}
             onChange={(e) => updateField('category_id', e.target.value)}
             required
+            disabled={!isEditable}
           >
             <option value="">Выбери категорию</option>
             {categories.map((category) => (
-              <option key={category.id} value={category.id}>{category.name}</option>
+              <option key={category.id} value={category.id}>
+                {category.name}
+              </option>
             ))}
           </select>
         </label>
 
         <label>
           Название
-          <input value={form.title} onChange={(e) => updateField('title', e.target.value)} required />
+          <input
+            value={form.title}
+            onChange={(e) => updateField('title', e.target.value)}
+            required
+            disabled={!isEditable}
+          />
         </label>
 
         <label>
           Описание
-          <textarea value={form.description} onChange={(e) => updateField('description', e.target.value)} rows={6} required />
+          <textarea
+            value={form.description}
+            onChange={(e) => updateField('description', e.target.value)}
+            rows={6}
+            required
+            disabled={!isEditable}
+          />
         </label>
 
         <div className="form-grid-two">
           <label>
             Цена за день, в копейках
-            <input type="number" min="0" value={form.daily_price_cents} onChange={(e) => updateField('daily_price_cents', Number(e.target.value))} required />
+            <input
+              type="number"
+              min="0"
+              value={form.daily_price_cents}
+              onChange={(e) => updateField('daily_price_cents', Number(e.target.value))}
+              required
+              disabled={!isEditable}
+            />
           </label>
           <label>
             Депозит, в копейках
-            <input type="number" min="0" value={form.deposit_cents} onChange={(e) => updateField('deposit_cents', Number(e.target.value))} required />
+            <input
+              type="number"
+              min="0"
+              value={form.deposit_cents}
+              onChange={(e) => updateField('deposit_cents', Number(e.target.value))}
+              required
+              disabled={!isEditable}
+            />
           </label>
         </div>
 
         <label>
           Город
-          <input value={form.city} onChange={(e) => updateField('city', e.target.value)} required />
+          <input
+            value={form.city}
+            onChange={(e) => updateField('city', e.target.value)}
+            required
+            disabled={!isEditable}
+          />
         </label>
 
         <label>
           Адрес самовывоза
-          <input value={form.pickup_address} onChange={(e) => updateField('pickup_address', e.target.value)} required />
+          <input
+            value={form.pickup_address}
+            onChange={(e) => updateField('pickup_address', e.target.value)}
+            required
+            disabled={!isEditable}
+          />
         </label>
 
         {message && <div className="alert success">{message}</div>}
         {error && <div className="alert error">{error}</div>}
 
-        <button className="button" disabled={saving}>{saving ? 'Сохраняем...' : isEdit ? 'Сохранить изменения' : 'Создать объявление'}</button>
+        {isEditable && (
+          <button className="button" disabled={saving}>
+            {saving ? 'Сохраняем...' : 'Сохранить объявление'}
+          </button>
+        )}
       </form>
 
       {isEdit && (
         <div className="card item-images-card">
           <h2>Изображения</h2>
-          <p className="muted">Допустимые форматы: JPEG, PNG, WebP. Максимум 5 MB на файл, максимум 5 файлов.</p>
+          <p className="muted">
+            Допустимые форматы: JPEG, PNG, WebP. Максимум 5 MB на файл, максимум 5 файлов.
+          </p>
 
-          <label className={`upload-dropzone ${uploadErrors.length ? 'error' : ''}`}>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              multiple
-              disabled={uploading || remainingSlots === 0}
-              onChange={(e) => handleFilesSelected(e.target.files)}
-            />
-            <span>{uploading ? 'Загружаем...' : remainingSlots === 0 ? 'Достигнут лимит 5 изображений' : 'Нажми или перетащи файлы сюда'}</span>
-          </label>
+          {isEditable && (
+            <label className={`upload-dropzone ${uploadErrors.length ? 'error' : ''}`}>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                disabled={uploading || remainingSlots === 0}
+                onChange={(e) => handleFilesSelected(e.target.files)}
+              />
+              <span>
+                {uploading
+                  ? 'Загружаем...'
+                  : remainingSlots === 0
+                    ? 'Достигнут лимит 5 изображений'
+                    : 'Нажми или перетащи файлы сюда'}
+              </span>
+            </label>
+          )}
 
           {uploadErrors.length > 0 && (
             <div className="alert error">
@@ -233,9 +322,15 @@ export default function ItemFormPage() {
             {images.map((image) => (
               <div className="image-card" key={image.id}>
                 <img src={image.url} alt="Изображение объявления" />
-                <button className="button danger" type="button" onClick={() => handleDeleteImage(image.id)}>
-                  Удалить
-                </button>
+                {isEditable && (
+                  <button
+                    className="button danger"
+                    type="button"
+                    onClick={() => handleDeleteImage(image.id)}
+                  >
+                    Удалить
+                  </button>
+                )}
               </div>
             ))}
             {!images.length && <div className="muted">Изображений пока нет</div>}

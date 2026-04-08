@@ -12,6 +12,7 @@ class UserRead(BaseModel):
     phone: str | None
     city: str | None
     is_active: bool
+    is_superuser: bool
     email_verified: bool
     created_at: datetime
     updated_at: datetime

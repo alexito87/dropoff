@@ -1,14 +1,16 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import AppLayout from './components/layout/AppLayout'
 import ProtectedRoute from './router/ProtectedRoute'
+import AdminRoute from './router/AdminRoute'
 import CatalogPage from './pages/CatalogPage'
 import LoginPage from './pages/LoginPage'
 import SignupPage from './pages/SignupPage'
 import ProfilePage from './pages/ProfilePage'
 import VerifyEmailPage from './pages/VerifyEmailPage'
-import PlaceholderPage from './pages/PlaceholderPage'
 import MyItemsPage from './pages/MyItemsPage'
 import ItemFormPage from './pages/ItemFormPage'
+import AdminModerationPage from './pages/AdminModerationPage'
+import NotificationsPage from './pages/NotificationsPage'
 
 export default function App() {
   return (
@@ -71,13 +73,24 @@ export default function App() {
       />
 
       <Route
-        path="/admin/moderation"
+        path="/notifications"
         element={
           <ProtectedRoute>
             <AppLayout>
-              <PlaceholderPage title="Модерация" />
+              <NotificationsPage />
             </AppLayout>
           </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/admin/moderation"
+        element={
+          <AdminRoute>
+            <AppLayout>
+              <AdminModerationPage />
+            </AppLayout>
+          </AdminRoute>
         }
       />
 
