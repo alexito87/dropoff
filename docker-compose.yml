@@ -1,0 +1,69 @@
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: rental-marketplace-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - dropoff_postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build:
+      context: ./backend
+    container_name: rental-marketplace-backend
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    depends_on:
+      - db
+      - mailpit
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: rental-marketplace-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: rental-marketplace-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    depends_on:
+      - db
+    ports:
+      - "5050:80"
+    volumes:
+      - dropoff_pgadmin_data:/var/lib/pgadmin
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: rental-marketplace-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+
+volumes:
+  dropoff_postgres_data:
+  dropoff_pgadmin_data:
