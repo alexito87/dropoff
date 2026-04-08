@@ -28,8 +28,11 @@ class ItemRead(ItemBase):
     id: UUID
     owner_id: UUID
     status: str
+    moderated_by: UUID | None = None
+    moderated_at: datetime | None = None
+    moderation_comment: str | None = None
     created_at: datetime
     updated_at: datetime
     images: list[ItemImageRead] = []
 
-    model_config = {'from_attributes': True}
+    model_config = {"from_attributes": True}

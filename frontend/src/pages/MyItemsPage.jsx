@@ -40,17 +40,38 @@ export default function MyItemsPage() {
               <h3>{item.title}</h3>
               <p className="muted">Статус: {item.status}</p>
               <p className="muted">Изображений: {item.images?.length || 0}</p>
+              {item.moderation_comment && (
+                <p className="muted">Комментарий модератора: {item.moderation_comment}</p>
+              )}
             </div>
+
             <div className="item-row-actions">
-              <Link className="button ghost" to={`/my-items/${item.id}/edit`}>
-                Редактировать
-              </Link>
-              <button className="button danger" type="button" onClick={() => handleDelete(item.id)}>
-                Удалить
-              </button>
+              {(item.status === 'draft' || item.status === 'rejected') && (
+                <>
+                  <Link className="button ghost" to={`/my-items/${item.id}/edit`}>
+                    Редактировать
+                  </Link>
+                  <button
+                    className="button danger"
+                    type="button"
+                    onClick={() => handleDelete(item.id)}
+                  >
+                    Удалить
+                  </button>
+                </>
+              )}
+
+              {item.status === 'pending_review' && (
+                <div className="muted">Объявление на проверке</div>
+              )}
+
+              {item.status === 'published' && (
+                <div className="muted">Объявление опубликовано</div>
+              )}
             </div>
           </div>
         ))}
+
         {!items.length && <div className="card">У тебя пока нет объявлений</div>}
       </div>
     </div>
