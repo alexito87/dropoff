@@ -12,6 +12,8 @@ import ItemFormPage from '../pages/ItemFormPage'
 import AdminModerationPage from '../pages/AdminModerationPage'
 import NotificationsPage from '../pages/NotificationsPage'
 import ItemDetailsPage from '../pages/ItemDetailsPage'
+import MyRentalRequestsPage from '../pages/MyRentalRequestsPage'
+import OwnerRentalRequestsPage from '../pages/OwnerRentalRequestsPage'
 
 export default function AppRouter() {
   return (
@@ -44,6 +46,28 @@ export default function AppRouter() {
           <AppLayout>
             <ItemDetailsPage />
           </AppLayout>
+        }
+      />
+
+      <Route
+        path="/rentals/me"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <MyRentalRequestsPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/rentals/owner"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <OwnerRentalRequestsPage />
+            </AppLayout>
+          </ProtectedRoute>
         }
       />
 

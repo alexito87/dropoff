@@ -53,6 +53,7 @@ def _build_catalog_item_details(item: Item) -> CatalogItemDetails:
             for image in item.images
         ],
         owner=CatalogOwnerPublic(
+            id=item.owner.id if item.owner else None,
             full_name=item.owner.full_name if item.owner else None,
             city=item.owner.city if item.owner else None,
         ),

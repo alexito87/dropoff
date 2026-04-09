@@ -13,6 +13,7 @@ class CatalogItemImagePublic(BaseModel):
 
 
 class CatalogOwnerPublic(BaseModel):
+    id: UUID | None = None
     full_name: str | None = None
     city: str | None = None
 
