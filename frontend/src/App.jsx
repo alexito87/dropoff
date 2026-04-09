@@ -11,6 +11,7 @@ import MyItemsPage from './pages/MyItemsPage'
 import ItemFormPage from './pages/ItemFormPage'
 import AdminModerationPage from './pages/AdminModerationPage'
 import NotificationsPage from './pages/NotificationsPage'
+import ItemDetailsPage from './pages/ItemDetailsPage'
 
 export default function App() {
   return (
@@ -24,6 +25,24 @@ export default function App() {
         element={
           <AppLayout>
             <CatalogPage />
+          </AppLayout>
+        }
+      />
+
+      <Route
+        path="/catalog"
+        element={
+          <AppLayout>
+            <CatalogPage />
+          </AppLayout>
+        }
+      />
+
+      <Route
+        path="/items/:id"
+        element={
+          <AppLayout>
+            <ItemDetailsPage />
           </AppLayout>
         }
       />
