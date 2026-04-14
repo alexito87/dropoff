@@ -600,3 +600,109 @@ select:focus {
     height: 280px;
   }
 }
+
+/* Sprint 5: rentals */
+.rental-request-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rental-summary {
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.rental-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 6px 0;
+}
+
+.rental-cta-unauth {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.rental-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.rental-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.rental-card-header h3 {
+  margin: 0 0 6px;
+}
+
+.rental-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.rental-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rental-owner-comment {
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.rental-owner-comment p {
+  margin: 6px 0 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.status-pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-approved {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-rejected {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.status-cancelled {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+@media (max-width: 900px) {
+  .rental-card-header,
+  .rental-card-grid {
+    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
