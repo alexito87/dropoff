@@ -1,11 +1,14 @@
 from math import ceil
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_db
+from app.core.config import settings
 from app.models.item import Item
 from app.schemas.catalog import (
     CatalogItemCard,
@@ -14,12 +17,21 @@ from app.schemas.catalog import (
     CatalogItemsResponse,
     CatalogOwnerPublic,
 )
+from app.services.cache import cache_service
+from app.services.cache_keys import (
+    catalog_item_details_key,
+    catalog_search_key,
+    catalog_search_namespace,
+)
+from app.services.etag import build_etag
+from app.services.image_url import build_versioned_image_url
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _build_catalog_item_card(item: Item) -> CatalogItemCard:
-    preview_image = item.images[0].url if item.images else None
+    preview_image = build_versioned_image_url(item.images[0].url, item.images[0].version) if item.images else None
 
     return CatalogItemCard(
         id=item.id,
@@ -48,7 +60,9 @@ def _build_catalog_item_details(item: Item) -> CatalogItemDetails:
             CatalogItemImagePublic(
                 id=image.id,
                 url=image.url,
+                versioned_url=build_versioned_image_url(image.url, image.version),
                 sort_order=image.sort_order,
+                version=image.version,
             )
             for image in item.images
         ],
@@ -77,10 +91,34 @@ def read_catalog_items(
             detail="Unsupported sort value. Allowed: newest, price_asc, price_desc",
         )
 
-    base_query = (
-        db.query(Item)
-        .filter(Item.status == "published")
+    namespace_version = cache_service.get_namespace_version(catalog_search_namespace())
+    cache_key = catalog_search_key(
+        namespace_version=namespace_version,
+        city=city,
+        category_id=category_id,
+        price_from=price_from,
+        price_to=price_to,
+        page=page,
+        page_size=page_size,
+        sort=sort,
     )
+
+    cached_payload = cache_service.get_json(cache_key)
+    if cached_payload is not None:
+        logger.info(
+            "Catalog search cache hit (v%s) for key=%s",
+            namespace_version,
+            cache_key,
+        )
+        return CatalogItemsResponse.model_validate(cached_payload)
+
+    logger.info(
+        "Catalog search cache miss (v%s) for key=%s",
+        namespace_version,
+        cache_key,
+    )
+
+    base_query = db.query(Item).filter(Item.status == "published")
 
     if city:
         base_query = base_query.filter(func.lower(Item.city) == city.strip().lower())
@@ -113,29 +151,66 @@ def read_catalog_items(
 
     pages = ceil(total / page_size) if total > 0 else 1
 
-    return CatalogItemsResponse(
+    response_payload = CatalogItemsResponse(
         items=[_build_catalog_item_card(item) for item in items],
         page=page,
         page_size=page_size,
         total=total,
         pages=pages,
+    ).model_dump(mode="json")
+
+    cache_service.set_json(
+        key=cache_key,
+        value=response_payload,
+        ttl_seconds=settings.CACHE_TTL_CATALOG_SEARCH_SECONDS,
     )
+
+    return CatalogItemsResponse.model_validate(response_payload)
 
 
 @router.get("/items/{item_id}", response_model=CatalogItemDetails)
-def read_catalog_item_details(item_id: UUID, db: Session = Depends(get_db)):
-    item = (
-        db.query(Item)
-        .options(
-            selectinload(Item.images),
-            selectinload(Item.category),
-            selectinload(Item.owner),
+def read_catalog_item_details(
+    item_id: UUID,
+    response: Response,
+    db: Session = Depends(get_db),
+    if_none_match: str | None = Header(default=None),
+) -> CatalogItemDetails | Response:
+    cache_key = catalog_item_details_key(str(item_id))
+
+    cached_payload = cache_service.get_json(cache_key)
+    if cached_payload is not None:
+        logger.info("Catalog item details cache hit for item_id=%s", item_id)
+        response_payload = cached_payload
+    else:
+        logger.info("Catalog item details cache miss for item_id=%s", item_id)
+
+        item = (
+            db.query(Item)
+            .options(
+                selectinload(Item.images),
+                selectinload(Item.category),
+                selectinload(Item.owner),
+            )
+            .filter(Item.id == item_id, Item.status == "published")
+            .first()
         )
-        .filter(Item.id == item_id, Item.status == "published")
-        .first()
-    )
 
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found")
 
-    return _build_catalog_item_details(item)
+        response_payload = _build_catalog_item_details(item).model_dump(mode="json")
+
+        cache_service.set_json(
+            key=cache_key,
+            value=response_payload,
+            ttl_seconds=settings.CACHE_TTL_ITEM_DETAILS_SECONDS,
+        )
+
+    etag = build_etag(response_payload)
+
+    if if_none_match == etag:
+        logger.info("Catalog item details ETag match -> 304 for item_id=%s", item_id)
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+
+    response.headers["ETag"] = etag
+    return CatalogItemDetails.model_validate(response_payload)

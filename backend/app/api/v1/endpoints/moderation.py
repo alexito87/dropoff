@@ -10,12 +10,51 @@ from app.models.item import Item
 from app.models.notification import Notification
 from app.models.user import User
 from app.schemas.item import ItemRead
+from app.schemas.item_image import ItemImageRead
+from app.services.cache_invalidation import invalidate_public_catalog_for_item
+from app.services.image_url import build_versioned_image_url
 
 router = APIRouter()
 
 
 class ModerationDecisionPayload(BaseModel):
     comment: str | None = Field(default=None, max_length=2000)
+
+
+def _serialize_item_image(image) -> ItemImageRead:
+    return ItemImageRead(
+        id=image.id,
+        item_id=image.item_id,
+        url=image.url,
+        versioned_url=build_versioned_image_url(image.url, image.version),
+        storage_path=image.storage_path,
+        mime_type=image.mime_type,
+        file_size_bytes=image.file_size_bytes,
+        sort_order=image.sort_order,
+        version=image.version,
+        created_at=image.created_at,
+    )
+
+
+def _serialize_item(item: Item) -> ItemRead:
+    return ItemRead(
+        id=item.id,
+        owner_id=item.owner_id,
+        category_id=item.category_id,
+        title=item.title,
+        description=item.description,
+        daily_price_cents=item.daily_price_cents,
+        deposit_cents=item.deposit_cents,
+        city=item.city,
+        pickup_address=item.pickup_address,
+        status=item.status,
+        moderated_by=item.moderated_by,
+        moderated_at=item.moderated_at,
+        moderation_comment=item.moderation_comment,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        images=[_serialize_item_image(image) for image in item.images],
+    )
 
 
 def _get_item_for_moderation(db: Session, item_id: UUID) -> Item:
@@ -49,13 +88,14 @@ def read_items_for_moderation(
     admin_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    return (
+    items = (
         db.query(Item)
         .options(selectinload(Item.images))
         .filter(Item.status == "pending_review")
         .order_by(Item.created_at.asc())
         .all()
     )
+    return [_serialize_item(item) for item in items]
 
 
 @router.get("/items/{item_id}", response_model=ItemRead)
@@ -64,7 +104,7 @@ def read_item_for_moderation(
     admin_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    return _get_item_for_moderation(db, item_id)
+    return _serialize_item(_get_item_for_moderation(db, item_id))
 
 
 @router.post("/items/{item_id}/approve", response_model=ItemRead)
@@ -88,8 +128,9 @@ def approve_item(
 
     db.add(item)
     db.commit()
+    invalidate_public_catalog_for_item(item.id)
     db.refresh(item)
-    return item
+    return _serialize_item(item)
 
 
 @router.post("/items/{item_id}/reject", response_model=ItemRead)
@@ -116,8 +157,9 @@ def reject_item(
 
     db.add(item)
     db.commit()
+    invalidate_public_catalog_for_item(item.id)
     db.refresh(item)
-    return item
+    return _serialize_item(item)
 
 
 @router.post("/items/{item_id}/needs-changes", response_model=ItemRead)
@@ -144,5 +186,6 @@ def needs_changes_item(
 
     db.add(item)
     db.commit()
+    invalidate_public_catalog_for_item(item.id)
     db.refresh(item)
-    return item
+    return _serialize_item(item)
