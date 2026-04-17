@@ -1,3 +1,4 @@
+txt
 fastapi
 uvicorn[standard]
 sqlalchemy
@@ -9,3 +10,5 @@ passlib
 email-validator
 python-multipart
 supabase
+redis[hiredis]
+

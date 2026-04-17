@@ -7,7 +7,9 @@ from pydantic import BaseModel
 class CatalogItemImagePublic(BaseModel):
     id: UUID
     url: str
+    versioned_url: str
     sort_order: int
+    version: int
 
     model_config = {"from_attributes": True}
 

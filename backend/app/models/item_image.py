@@ -18,6 +18,7 @@ class ItemImage(Base):
     mime_type = Column(String(100), nullable=False)
     file_size_bytes = Column(Integer, nullable=False)
     sort_order = Column(Integer, nullable=False, default=0)
+    version = Column(Integer, nullable=False, default=1, server_default="1")
 
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 

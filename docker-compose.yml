@@ -1,4 +1,3 @@
-
 services:
   db:
     image: postgres:16-alpine
@@ -9,9 +8,14 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - dropoff_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: rental-marketplace-redis
+    restart: unless-stopped
 
   backend:
     build:
@@ -22,6 +26,7 @@ services:
       - ./.env
     depends_on:
       - db
+      - redis
       - mailpit
     ports:
       - "8000:8000"
@@ -67,3 +72,4 @@ services:
 volumes:
   dropoff_postgres_data:
   dropoff_pgadmin_data:
+
