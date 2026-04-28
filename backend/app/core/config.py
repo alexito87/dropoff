@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     redis_socket_timeout_seconds: float = 1.0
     redis_socket_connect_timeout_seconds: float = 1.0
 
+    kafka_bootstrap_servers: str = "kafka:9092"
+    kafka_client_id: str = "dropoff-backend"
+    kafka_enabled: bool = True
+
     cache_ttl_categories_seconds: int = 3600
     cache_ttl_item_details_seconds: int = 300
     cache_ttl_listing_details_seconds: int = 300
@@ -115,6 +119,18 @@ class Settings(BaseSettings):
     @property
     def REDIS_SOCKET_CONNECT_TIMEOUT_SECONDS(self) -> float:
         return self.redis_socket_connect_timeout_seconds
+
+    @property
+    def KAFKA_BOOTSTRAP_SERVERS(self) -> str:
+        return self.kafka_bootstrap_servers
+
+    @property
+    def KAFKA_CLIENT_ID(self) -> str:
+        return self.kafka_client_id
+
+    @property
+    def KAFKA_ENABLED(self) -> bool:
+        return self.kafka_enabled
 
     @property
     def CACHE_TTL_CATEGORIES_SECONDS(self) -> int:
