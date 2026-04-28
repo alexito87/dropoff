@@ -18,6 +18,7 @@ export default function Sidebar() {
             <Link to="/my-items">Мои объявления</Link>
             <Link to="/rentals/me">Мои заявки</Link>
             <Link to="/rentals/owner">Заявки на мои вещи</Link>
+            <Link to="/paid-rentals">Оплаченные аренды</Link>
             <Link to="/notifications">Уведомления</Link>
           </>
         )}

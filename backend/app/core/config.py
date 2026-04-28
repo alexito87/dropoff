@@ -1,4 +1,3 @@
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +51,10 @@ class Settings(BaseSettings):
     cache_ttl_catalog_search_seconds: int = 60
     cache_ttl_home_feed_seconds: int = 600
     cache_ttl_related_items_seconds: int = 600
+
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    stripe_currency: str = "usd"
 
     @property
     def cors_origins(self) -> list[str]:
@@ -139,4 +142,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

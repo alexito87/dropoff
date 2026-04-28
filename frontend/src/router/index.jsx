@@ -14,6 +14,12 @@ import NotificationsPage from '../pages/NotificationsPage'
 import ItemDetailsPage from '../pages/ItemDetailsPage'
 import MyRentalRequestsPage from '../pages/MyRentalRequestsPage'
 import OwnerRentalRequestsPage from '../pages/OwnerRentalRequestsPage'
+import CartPage from '../pages/CartPage'
+import CheckoutPage from '../pages/CheckoutPage'
+import SandboxPaymentPage from '../pages/SandboxPaymentPage'
+import OrderSuccessPage from '../pages/OrderSuccessPage'
+import PaidRentalsPage from '../pages/PaidRentalsPage'
+
 
 export default function AppRouter() {
   return (
@@ -46,6 +52,50 @@ export default function AppRouter() {
           <AppLayout>
             <ItemDetailsPage />
           </AppLayout>
+        }
+      />
+
+      <Route
+        path="/cart"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <CartPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/checkout"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <CheckoutPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/payment/sandbox/:orderId"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <SandboxPaymentPage />
+            </AppLayout>
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/orders/:orderId/success"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <OrderSuccessPage />
+            </AppLayout>
+          </ProtectedRoute>
         }
       />
 
@@ -134,6 +184,17 @@ export default function AppRouter() {
               <AdminModerationPage />
             </AppLayout>
           </AdminRoute>
+        }
+      />
+
+      <Route
+        path="/paid-rentals"
+        element={
+          <ProtectedRoute>
+            <AppLayout>
+              <PaidRentalsPage />
+            </AppLayout>
+          </ProtectedRoute>
         }
       />
 

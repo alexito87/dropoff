@@ -11,4 +11,4 @@ email-validator
 python-multipart
 supabase
 redis[hiredis]
-
+stripe

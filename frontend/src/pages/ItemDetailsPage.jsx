@@ -2,11 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import EmptyState from '../components/common/EmptyState'
 import { getCatalogItemDetails } from '../api/catalog'
-import { createRental } from '../api/rentals'
+import { addCartItem } from '../api/cart'
 import { useAuth } from '../state/AuthContext'
 
 function formatDateInput(value) {
   return value || ''
+}
+
+function money(cents) {
+  return `$${(cents / 100).toFixed(2)}`
 }
 
 export default function ItemDetailsPage() {
@@ -63,11 +67,11 @@ export default function ItemDetailsPage() {
       daysCount,
       rentalCost,
       depositCents: item.deposit_cents,
-      totalEstimateCents: rentalCost,
+      totalEstimateCents: rentalCost + item.deposit_cents,
     }
   }, [startDate, endDate, item])
 
-  async function handleSubmitRental(event) {
+  async function handleAddToCart(event) {
     event.preventDefault()
 
     if (!isAuthenticated) {
@@ -80,15 +84,15 @@ export default function ItemDetailsPage() {
       setError('')
       setSuccessMessage('')
 
-      await createRental({
+      await addCartItem({
         item_id: item.id,
-        start_date: startDate,
-        end_date: endDate,
+        rent_start: startDate,
+        rent_end: endDate,
+        quantity: 1,
       })
 
-      setSuccessMessage('Заявка на аренду отправлена владельцу.')
-      setStartDate('')
-      setEndDate('')
+      setSuccessMessage('Вещь добавлена в корзину.')
+      navigate('/cart')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -185,11 +189,11 @@ export default function ItemDetailsPage() {
           <div className="item-details-pricing">
             <div className="item-details-price-block">
               <span className="muted">Цена аренды</span>
-              <strong>{item.daily_price_cents} центов / день</strong>
+              <strong>{money(item.daily_price_cents)} / день</strong>
             </div>
             <div className="item-details-price-block">
               <span className="muted">Депозит</span>
-              <strong>{item.deposit_cents} центов</strong>
+              <strong>{money(item.deposit_cents)}</strong>
             </div>
           </div>
 
@@ -207,21 +211,21 @@ export default function ItemDetailsPage() {
           </div>
 
           <div className="item-details-section">
-            <h2>Заявка на аренду</h2>
+            <h2>Добавить в корзину</h2>
 
             {!isAuthenticated ? (
               <div className="rental-cta-unauth">
-                <p className="muted">Чтобы отправить заявку, сначала войди в систему.</p>
+                <p className="muted">Чтобы добавить вещь в корзину, сначала войди в систему.</p>
                 <Link className="button" to="/login">
                   Войти, чтобы арендовать
                 </Link>
               </div>
             ) : isOwnItem ? (
               <div className="alert error">
-                Нельзя отправить заявку на собственное объявление.
+                Нельзя арендовать собственное объявление.
               </div>
             ) : (
-              <form className="rental-request-form" onSubmit={handleSubmitRental}>
+              <form className="rental-request-form" onSubmit={handleAddToCart}>
                 <div className="form-grid-two">
                   <label>
                     Дата начала
@@ -253,15 +257,15 @@ export default function ItemDetailsPage() {
                       </div>
                       <div className="rental-summary-row">
                         <span>Аренда</span>
-                        <strong>{rentalSummary.rentalCost} центов</strong>
+                        <strong>{money(rentalSummary.rentalCost)}</strong>
                       </div>
                       <div className="rental-summary-row">
                         <span>Депозит</span>
-                        <strong>{rentalSummary.depositCents} центов</strong>
+                        <strong>{money(rentalSummary.depositCents)}</strong>
                       </div>
                       <div className="rental-summary-row">
-                        <span>Итого без депозита</span>
-                        <strong>{rentalSummary.totalEstimateCents} центов</strong>
+                        <span>Итого по вещи</span>
+                        <strong>{money(rentalSummary.totalEstimateCents)}</strong>
                       </div>
                     </>
                   ) : (
@@ -271,7 +275,7 @@ export default function ItemDetailsPage() {
 
                 <div className="item-details-actions">
                   <button className="button" type="submit" disabled={submitting}>
-                    {submitting ? 'Отправка...' : 'Отправить заявку'}
+                    {submitting ? 'Добавление...' : 'Добавить в корзину'}
                   </button>
                 </div>
               </form>
