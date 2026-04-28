@@ -6,6 +6,9 @@ from app.models.email_verification_token import EmailVerificationToken
 from app.models.notification import Notification
 from app.models.rental import Rental
 from app.models.audit_log_event import AuditLogEvent
+from app.models.cart import Cart, CartItem
+from app.models.order import Order, OrderItem
+from app.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
 
 __all__ = [
     "User",
@@ -16,4 +19,12 @@ __all__ = [
     "Notification",
     "Rental",
     "AuditLogEvent",
+    "Cart",
+    "CartItem",
+    "Order",
+    "OrderItem",
+    "Payment",
+    "PaymentTransaction",
+    "StripeCheckoutSession",
+    "StripePaymentIntent",
 ]
