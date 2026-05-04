@@ -1,8 +1,22 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, cart, catalog, categories, health, items, moderation, notifications, orders, rentals, users
+from app.api.v1.endpoints import (
+    auth,
+    cart,
+    catalog,
+    categories,
+    health,
+    items,
+    kafka,
+    moderation,
+    notifications,
+    orders,
+    rentals,
+    users,
+)
 
 api_router = APIRouter()
+
 api_router.include_router(health.router, prefix="/health-check", tags=["health"])
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
@@ -12,5 +26,14 @@ api_router.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
 api_router.include_router(cart.router, prefix="/cart", tags=["cart"])
 api_router.include_router(orders.router, prefix="/orders", tags=["orders"])
 api_router.include_router(rentals.router, prefix="/rentals", tags=["rentals"])
-api_router.include_router(moderation.router, prefix="/admin/moderation", tags=["moderation"])
-api_router.include_router(notifications.router, prefix="/notifications", tags=["notifications"])
+api_router.include_router(kafka.router, prefix="/kafka", tags=["kafka"])
+api_router.include_router(
+    moderation.router,
+    prefix="/admin/moderation",
+    tags=["moderation"],
+)
+api_router.include_router(
+    notifications.router,
+    prefix="/notifications",
+    tags=["notifications"],
+)
