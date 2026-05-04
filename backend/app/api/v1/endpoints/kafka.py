@@ -1,11 +1,12 @@
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.events.kafka_health import check_kafka_connection
 from app.events.outbox import add_event_to_outbox
+from app.events.outbox_publisher import publish_pending_outbox_events
 from app.events.producer import kafka_event_producer
 from app.events.schemas import EventEnvelope
 from app.events.topics import ALL_TOPICS, AUDIT_EVENTS_TOPIC
@@ -94,4 +95,18 @@ def create_test_outbox_event(db: Session = Depends(get_db)):
             "published_at": outbox_event.published_at,
         },
         "event": event.to_kafka_dict(),
+    }
+
+
+@router.post("/publish-outbox")
+async def publish_outbox_events(
+    limit: int = Query(default=10, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    publish_result = await publish_pending_outbox_events(db, limit=limit)
+
+    return {
+        "service": "outbox",
+        "status": "processed",
+        "result": publish_result,
     }
