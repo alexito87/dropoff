@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
 from app.events.order_events import add_order_created_event_to_outbox
+from app.events.notification_events import add_notification_created_event_to_outbox
 from app.events.payment_events import (
     add_checkout_session_created_event_to_outbox,
     add_payment_succeeded_event_to_outbox,
@@ -53,13 +54,21 @@ def _stripe_dt(timestamp_value):
 
 
 def _create_notification(db: Session, user_id, notification_type: str, payload: dict):
-    db.add(
-        Notification(
-            user_id=user_id,
-            type=notification_type,
-            payload=payload,
-        )
+    notification = Notification(
+        user_id=user_id,
+        type=notification_type,
+        payload=payload,
     )
+
+    db.add(notification)
+    db.flush()
+
+    add_notification_created_event_to_outbox(
+        db,
+        notification=notification,
+    )
+
+    return notification
 
 
 def _add_transaction(
