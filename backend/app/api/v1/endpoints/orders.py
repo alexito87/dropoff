@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
 from app.events.order_events import add_order_created_event_to_outbox
+from app.events.payment_events import (
+    add_checkout_session_created_event_to_outbox,
+    add_payment_succeeded_event_to_outbox,
+)
 from app.models.cart import Cart, CartItem
 from app.models.item import Item
 from app.models.notification import Notification
@@ -291,6 +295,7 @@ def _sync_stripe_session_state(
     payment_status = _stripe_value(stripe_session, "payment_status", "unpaid") or "unpaid"
     payment_intent_id = _get_payment_intent_id(stripe_session)
     now = _now()
+    was_paid_before_sync = payment.status == "paid"
 
     checkout_session = (
         db.query(StripeCheckoutSession)
@@ -394,6 +399,15 @@ def _sync_stripe_session_state(
                 "provider": "stripe",
             },
         )
+
+        if not was_paid_before_sync:
+            add_payment_succeeded_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+                stripe_checkout_session_id=provider_session_id,
+                stripe_payment_intent_id=payment_intent_id,
+            )
     elif session_status == "expired":
         order.status = "payment_expired"
         payment.status = "expired"
@@ -584,13 +598,6 @@ async def stripe_webhook(
     stripe_signature: str | None = Header(default=None, alias="stripe-signature"),
     db: Session = Depends(get_db),
 ):
-    """
-    Stripe webhook endpoint.
-
-    This endpoint is called by Stripe CLI or Stripe Dashboard.
-    The local DB update is done in a single transaction.
-    Repeated webhooks should not break state because synchronization is idempotent.
-    """
     if not settings.stripe_webhook_secret:
         raise HTTPException(
             status_code=400,
@@ -911,6 +918,15 @@ def create_checkout_session(
         tx_status="success",
         provider_tx_id=stripe_session.id,
     )
+
+    add_checkout_session_created_event_to_outbox(
+        db,
+        order=order,
+        payment=payment,
+        checkout_session_id=stripe_session.id,
+        checkout_url=stripe_session.url,
+    )
+
     db.add(local_session)
     db.add(payment)
     db.add(order)
@@ -1039,6 +1055,13 @@ def mark_order_paid_in_sandbox(
         db.add(order_item)
 
     _add_transaction(db, payment, tx_type="sandbox_payment_succeeded", tx_status="success")
+
+    add_payment_succeeded_event_to_outbox(
+        db,
+        order=order,
+        payment=payment,
+    )
+
     db.add(order)
     db.add(payment)
     db.commit()
