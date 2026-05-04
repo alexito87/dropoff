@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
+from app.events.order_events import add_order_created_event_to_outbox
 from app.models.cart import Cart, CartItem
 from app.models.item import Item
 from app.models.notification import Notification
@@ -203,8 +204,8 @@ def _build_stripe_line_items(db: Session, order: Order) -> list[dict]:
                     "product_data": {
                         "name": item_title,
                         "description": (
-                            f"Аренда {days_count} дн.: {order_item.rent_start} — {order_item.rent_end}. "
-                            f"Включая депозит: {order_item.total_deposit_cents / 100:.2f} {settings.stripe_currency.upper()}"
+                            f"Rental for {days_count} days: {order_item.rent_start} — {order_item.rent_end}. "
+                            f"Including deposit: {order_item.total_deposit_cents / 100:.2f} {settings.stripe_currency.upper()}"
                         ),
                     },
                 },
@@ -219,7 +220,7 @@ def _build_stripe_line_items(db: Session, order: Order) -> list[dict]:
                     "currency": settings.stripe_currency,
                     "unit_amount": order.delivery_fee_cents,
                     "product_data": {
-                        "name": "Доставка",
+                        "name": "Delivery",
                         "description": order.delivery_method,
                     },
                 },
@@ -302,16 +303,32 @@ def _sync_stripe_session_state(
             order_id=order.id,
             user_id=order.user_id,
             provider_session_id=provider_session_id,
-            amount_total_cents=int(_stripe_value(stripe_session, "amount_total", payment.amount_total_cents) or payment.amount_total_cents),
-            currency=_stripe_value(stripe_session, "currency", payment.currency) or payment.currency,
+            amount_total_cents=int(
+                _stripe_value(stripe_session, "amount_total", payment.amount_total_cents)
+                or payment.amount_total_cents
+            ),
+            currency=_stripe_value(stripe_session, "currency", payment.currency)
+            or payment.currency,
         )
         db.add(checkout_session)
 
     checkout_session.status = session_status
     checkout_session.payment_status = payment_status
-    checkout_session.checkout_url = _stripe_value(stripe_session, "url") or checkout_session.checkout_url
-    checkout_session.amount_total_cents = int(_stripe_value(stripe_session, "amount_total", checkout_session.amount_total_cents) or checkout_session.amount_total_cents)
-    checkout_session.currency = _stripe_value(stripe_session, "currency", checkout_session.currency) or checkout_session.currency
+    checkout_session.checkout_url = (
+        _stripe_value(stripe_session, "url") or checkout_session.checkout_url
+    )
+    checkout_session.amount_total_cents = int(
+        _stripe_value(
+            stripe_session,
+            "amount_total",
+            checkout_session.amount_total_cents,
+        )
+        or checkout_session.amount_total_cents
+    )
+    checkout_session.currency = (
+        _stripe_value(stripe_session, "currency", checkout_session.currency)
+        or checkout_session.currency
+    )
     checkout_session.expires_at = _stripe_dt(_stripe_value(stripe_session, "expires_at"))
     checkout_session.updated_at = now
     if session_status == "complete":
@@ -414,7 +431,10 @@ def create_order_from_cart(
         raise HTTPException(status_code=400, detail="Unsupported delivery method")
 
     if payload.payment_method not in SUPPORTED_PAYMENT_METHODS:
-        raise HTTPException(status_code=400, detail="For MVP only stripe_checkout is supported")
+        raise HTTPException(
+            status_code=400,
+            detail="For MVP only stripe_checkout is supported",
+        )
 
     try:
         cart = (
@@ -475,7 +495,10 @@ def create_order_from_cart(
         for cart_item in cart_items:
             item = db.query(Item).filter(Item.id == cart_item.item_id).first()
             if not item:
-                raise HTTPException(status_code=400, detail="One of cart items no longer exists")
+                raise HTTPException(
+                    status_code=400,
+                    detail="One of cart items no longer exists",
+                )
 
             owner_ids.add(item.owner_id)
             db.add(
@@ -491,7 +514,8 @@ def create_order_from_cart(
                     deposit_cents=cart_item.deposit_cents,
                     rent_total_cents=cart_item.rent_total_cents,
                     total_deposit_cents=cart_item.total_deposit_cents,
-                    line_total_cents=cart_item.rent_total_cents + cart_item.total_deposit_cents,
+                    line_total_cents=cart_item.rent_total_cents
+                    + cart_item.total_deposit_cents,
                     created_at=now,
                     updated_at=now,
                 )
@@ -507,7 +531,12 @@ def create_order_from_cart(
             db,
             current_user.id,
             "order_created",
-            {"order_id": str(order.id), "payment_id": str(payment.id), "status": order.status, "total_amount_cents": total_amount},
+            {
+                "order_id": str(order.id),
+                "payment_id": str(payment.id),
+                "status": order.status,
+                "total_amount_cents": total_amount,
+            },
         )
 
         for owner_id in owner_ids:
@@ -517,6 +546,15 @@ def create_order_from_cart(
                 "booking_created",
                 {"order_id": str(order.id), "status": order.status},
             )
+
+        add_order_created_event_to_outbox(
+            db,
+            order=order,
+            payment=payment,
+            cart=cart,
+            cart_items=cart_items,
+            user_id=current_user.id,
+        )
 
         db.commit()
         db.refresh(order)
@@ -549,13 +587,15 @@ async def stripe_webhook(
     """
     Stripe webhook endpoint.
 
-    Важно:
-    - этот endpoint должен вызываться Stripe CLI или Stripe Dashboard;
-    - обновление нашей БД происходит в одной локальной DB-транзакции;
-    - повторный webhook не должен ломать состояние, потому что синхронизация идемпотентна.
+    This endpoint is called by Stripe CLI or Stripe Dashboard.
+    The local DB update is done in a single transaction.
+    Repeated webhooks should not break state because synchronization is idempotent.
     """
     if not settings.stripe_webhook_secret:
-        raise HTTPException(status_code=400, detail="Stripe webhook secret is not configured")
+        raise HTTPException(
+            status_code=400,
+            detail="Stripe webhook secret is not configured",
+        )
 
     payload = await request.body()
 
@@ -579,14 +619,25 @@ async def stripe_webhook(
     event_data = _stripe_value(event, "data", {}) or {}
     raw_session = _stripe_value(event_data, "object")
     raw_metadata = _stripe_value(raw_session, "metadata", {}) or {}
-    order_id = raw_metadata.get("order_id") if isinstance(raw_metadata, dict) else _stripe_value(raw_metadata, "order_id")
+    order_id = (
+        raw_metadata.get("order_id")
+        if isinstance(raw_metadata, dict)
+        else _stripe_value(raw_metadata, "order_id")
+    )
     provider_session_id = _stripe_value(raw_session, "id")
 
     if not order_id or not provider_session_id:
-        return {"received": True, "ignored": True, "reason": "missing order_id or session_id"}
+        return {
+            "received": True,
+            "ignored": True,
+            "reason": "missing order_id or session_id",
+        }
 
     if not settings.stripe_secret_key:
-        raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="STRIPE_SECRET_KEY is not configured",
+        )
 
     stripe.api_key = settings.stripe_secret_key
 
@@ -681,7 +732,10 @@ def read_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    order = db.query(Order).filter(Order.id == order_id, Order.user_id == current_user.id).first()
+    order = db.query(Order).filter(
+        Order.id == order_id,
+        Order.user_id == current_user.id,
+    ).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return _order_to_read(db, order)
@@ -694,7 +748,10 @@ def create_checkout_session(
     db: Session = Depends(get_db),
 ):
     if not settings.stripe_secret_key:
-        raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="STRIPE_SECRET_KEY is not configured",
+        )
 
     order = (
         db.query(Order)
@@ -706,11 +763,17 @@ def create_checkout_session(
         raise HTTPException(status_code=404, detail="Order not found")
 
     if order.status != "awaiting_payment":
-        raise HTTPException(status_code=400, detail="Only awaiting_payment order can be paid")
+        raise HTTPException(
+            status_code=400,
+            detail="Only awaiting_payment order can be paid",
+        )
 
     payment = _get_order_payment(db, order.id)
     if not payment:
-        raise HTTPException(status_code=500, detail="Payment was not created for this order")
+        raise HTTPException(
+            status_code=500,
+            detail="Payment was not created for this order",
+        )
 
     if payment.status in PAYMENT_TERMINAL_STATUSES:
         raise HTTPException(status_code=400, detail=f"Payment is already {payment.status}")
@@ -748,7 +811,12 @@ def create_checkout_session(
     )
     payment.status = "checkout_creating"
     payment.updated_at = now
-    _add_transaction(db, payment, tx_type="checkout_session_create_requested", tx_status="pending")
+    _add_transaction(
+        db,
+        payment,
+        tx_type="checkout_session_create_requested",
+        tx_status="pending",
+    )
     db.add(local_session)
     db.add(payment)
     db.commit()
@@ -783,12 +851,22 @@ def create_checkout_session(
     except stripe.StripeError as exc:
         order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
         payment = _get_order_payment(db, order_id)
-        local_session = db.query(StripeCheckoutSession).filter(StripeCheckoutSession.id == local_session.id).first()
+        local_session = (
+            db.query(StripeCheckoutSession)
+            .filter(StripeCheckoutSession.id == local_session.id)
+            .first()
+        )
         if payment:
             payment.status = "failed"
             payment.failed_at = _now()
             payment.updated_at = _now()
-            _add_transaction(db, payment, tx_type="checkout_session_create_failed", tx_status="failed", error_message=str(exc))
+            _add_transaction(
+                db,
+                payment,
+                tx_type="checkout_session_create_failed",
+                tx_status="failed",
+                error_message=str(exc),
+            )
             db.add(payment)
         if order:
             order.status = "payment_failed"
@@ -803,12 +881,18 @@ def create_checkout_session(
 
     order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
     payment = _get_order_payment(db, order_id)
-    local_session = db.query(StripeCheckoutSession).filter(StripeCheckoutSession.id == local_session.id).first()
+    local_session = (
+        db.query(StripeCheckoutSession)
+        .filter(StripeCheckoutSession.id == local_session.id)
+        .first()
+    )
     now = _now()
 
     local_session.provider_session_id = stripe_session.id
     local_session.status = getattr(stripe_session, "status", None) or "open"
-    local_session.payment_status = _stripe_value(stripe_session, "payment_status", "unpaid") or "unpaid"
+    local_session.payment_status = (
+        _stripe_value(stripe_session, "payment_status", "unpaid") or "unpaid"
+    )
     local_session.checkout_url = _stripe_value(stripe_session, "url")
     local_session.expires_at = _stripe_dt(_stripe_value(stripe_session, "expires_at"))
     local_session.updated_at = now
@@ -820,7 +904,13 @@ def create_checkout_session(
     order.stripe_checkout_session_id = stripe_session.id
     order.updated_at = now
 
-    _add_transaction(db, payment, tx_type="checkout_session_created", tx_status="success", provider_tx_id=stripe_session.id)
+    _add_transaction(
+        db,
+        payment,
+        tx_type="checkout_session_created",
+        tx_status="success",
+        provider_tx_id=stripe_session.id,
+    )
     db.add(local_session)
     db.add(payment)
     db.add(order)
@@ -843,7 +933,10 @@ def confirm_stripe_payment(
     db: Session = Depends(get_db),
 ):
     if not settings.stripe_secret_key:
-        raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY is not configured")
+        raise HTTPException(
+            status_code=500,
+            detail="STRIPE_SECRET_KEY is not configured",
+        )
 
     order = (
         db.query(Order)
@@ -856,23 +949,48 @@ def confirm_stripe_payment(
 
     payment = _get_order_payment(db, order.id)
     if not payment:
-        raise HTTPException(status_code=500, detail="Payment was not created for this order")
+        raise HTTPException(
+            status_code=500,
+            detail="Payment was not created for this order",
+        )
 
     stripe.api_key = settings.stripe_secret_key
 
     try:
-        stripe_session = stripe.checkout.Session.retrieve(payload.stripe_checkout_session_id, expand=["payment_intent"])
+        stripe_session = stripe.checkout.Session.retrieve(
+            payload.stripe_checkout_session_id,
+            expand=["payment_intent"],
+        )
     except stripe.StripeError as exc:
-        _add_transaction(db, payment, tx_type="checkout_session_retrieve_failed", tx_status="failed", error_message=str(exc))
+        _add_transaction(
+            db,
+            payment,
+            tx_type="checkout_session_retrieve_failed",
+            tx_status="failed",
+            error_message=str(exc),
+        )
         db.commit()
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}")
 
     stripe_metadata = _stripe_value(stripe_session, "metadata", {}) or {}
-    stripe_order_id = stripe_metadata.get("order_id") if isinstance(stripe_metadata, dict) else _stripe_value(stripe_metadata, "order_id")
+    stripe_order_id = (
+        stripe_metadata.get("order_id")
+        if isinstance(stripe_metadata, dict)
+        else _stripe_value(stripe_metadata, "order_id")
+    )
     if stripe_order_id != str(order.id):
-        raise HTTPException(status_code=400, detail="Stripe session does not belong to this order")
+        raise HTTPException(
+            status_code=400,
+            detail="Stripe session does not belong to this order",
+        )
 
-    _sync_stripe_session_state(db, order, payment, stripe_session, tx_type="checkout_session_confirmed")
+    _sync_stripe_session_state(
+        db,
+        order,
+        payment,
+        stripe_session,
+        tx_type="checkout_session_confirmed",
+    )
     db.commit()
     db.refresh(order)
     return _order_to_read(db, order)
@@ -895,10 +1013,16 @@ def mark_order_paid_in_sandbox(
 
     payment = _get_order_payment(db, order.id)
     if not payment:
-        raise HTTPException(status_code=500, detail="Payment was not created for this order")
+        raise HTTPException(
+            status_code=500,
+            detail="Payment was not created for this order",
+        )
 
     if order.status != "awaiting_payment":
-        raise HTTPException(status_code=400, detail="Only awaiting_payment order can be paid")
+        raise HTTPException(
+            status_code=400,
+            detail="Only awaiting_payment order can be paid",
+        )
 
     now = _now()
     order.status = "paid"
