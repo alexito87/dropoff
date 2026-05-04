@@ -9,6 +9,7 @@ from app.models.audit_log_event import AuditLogEvent
 from app.models.cart import Cart, CartItem
 from app.models.order import Order, OrderItem
 from app.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
+from app.models.outbox_event import OutboxEvent
 
 __all__ = [
     "User",
@@ -27,4 +28,5 @@ __all__ = [
     "PaymentTransaction",
     "StripeCheckoutSession",
     "StripePaymentIntent",
+    "OutboxEvent",
 ]
