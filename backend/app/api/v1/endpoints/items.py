@@ -8,6 +8,10 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
+from app.events.item_events import (
+    add_item_created_event_to_outbox,
+    add_item_submitted_for_moderation_event_to_outbox,
+)
 from app.models.item import Item
 from app.models.item_image import ItemImage
 from app.models.user import User
@@ -118,6 +122,14 @@ def read_my_items(current_user: User = Depends(get_current_user), db: Session = 
 def create_item(payload: ItemCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     item = Item(owner_id=current_user.id, status="draft", **payload.model_dump())
     db.add(item)
+    db.flush()
+
+    add_item_created_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=current_user.id,
+    )
+
     db.commit()
     db.refresh(item)
     return _serialize_item(item)
@@ -177,12 +189,22 @@ def submit_item_for_moderation(
     if not item.images:
         raise HTTPException(status_code=400, detail="At least one image is required")
 
+    previous_status = item.status
     item.status = "pending_review"
     item.moderated_by = None
     item.moderated_at = None
     item.moderation_comment = None
 
     db.add(item)
+    db.flush()
+
+    add_item_submitted_for_moderation_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=current_user.id,
+        previous_status=previous_status,
+    )
+
     db.commit()
     db.refresh(item)
     return _serialize_item(item)
