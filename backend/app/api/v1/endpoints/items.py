@@ -12,6 +12,7 @@ from app.events.item_events import (
     add_item_created_event_to_outbox,
     add_item_submitted_for_moderation_event_to_outbox,
 )
+from app.models.category import Category
 from app.models.item import Item
 from app.models.item_image import ItemImage
 from app.models.user import User
@@ -73,6 +74,12 @@ def _get_owned_item(db: Session, item_id: UUID, owner_id: UUID) -> Item:
     return item
 
 
+def _ensure_category_exists(db: Session, category_id: UUID) -> None:
+    category_exists = db.query(Category.id).filter(Category.id == category_id).first()
+    if not category_exists:
+        raise HTTPException(status_code=400, detail="Category does not exist")
+
+
 def _ensure_item_editable(item: Item):
     if item.status not in {"draft", "rejected"}:
         raise HTTPException(
@@ -120,6 +127,8 @@ def read_my_items(current_user: User = Depends(get_current_user), db: Session = 
 
 @router.post("", response_model=ItemRead, status_code=status.HTTP_201_CREATED)
 def create_item(payload: ItemCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    _ensure_category_exists(db, payload.category_id)
+
     item = Item(owner_id=current_user.id, status="draft", **payload.model_dump())
     db.add(item)
     db.flush()
@@ -145,6 +154,7 @@ def update_item(item_id: UUID, payload: ItemUpdate, current_user: User = Depends
     item = _get_owned_item(db, item_id, current_user.id)
     old_status = item.status
     _ensure_item_editable(item)
+    _ensure_category_exists(db, payload.category_id)
 
     for field, value in payload.model_dump().items():
         setattr(item, field, value)
