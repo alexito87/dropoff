@@ -6,6 +6,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_admin, get_db
+from app.events.moderation_events import (
+    add_item_approved_event_to_outbox,
+    add_item_needs_changes_event_to_outbox,
+    add_item_rejected_event_to_outbox,
+)
+from app.events.notification_events import add_notification_created_event_to_outbox
 from app.models.item import Item
 from app.models.notification import Notification
 from app.models.user import User
@@ -81,6 +87,14 @@ def _notify_owner(db: Session, item: Item, notification_type: str, comment: str 
         },
     )
     db.add(notification)
+    db.flush()
+
+    add_notification_created_event_to_outbox(
+        db,
+        notification=notification,
+    )
+
+    return notification
 
 
 @router.get("/items", response_model=list[ItemRead])
@@ -119,6 +133,7 @@ def approve_item(
     if item.status != "pending_review":
         raise HTTPException(status_code=400, detail="Only pending_review item can be approved")
 
+    previous_status = item.status
     item.status = "published"
     item.moderated_by = admin_user.id
     item.moderated_at = datetime.now(timezone.utc)
@@ -127,6 +142,15 @@ def approve_item(
     _notify_owner(db, item, "item_approved", payload.comment)
 
     db.add(item)
+    db.flush()
+
+    add_item_approved_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=admin_user.id,
+        previous_status=previous_status,
+    )
+
     db.commit()
     invalidate_public_catalog_for_item(item.id)
     db.refresh(item)
@@ -148,6 +172,7 @@ def reject_item(
     if not payload.comment:
         raise HTTPException(status_code=400, detail="Comment is required for reject")
 
+    previous_status = item.status
     item.status = "rejected"
     item.moderated_by = admin_user.id
     item.moderated_at = datetime.now(timezone.utc)
@@ -156,6 +181,15 @@ def reject_item(
     _notify_owner(db, item, "item_rejected", payload.comment)
 
     db.add(item)
+    db.flush()
+
+    add_item_rejected_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=admin_user.id,
+        previous_status=previous_status,
+    )
+
     db.commit()
     invalidate_public_catalog_for_item(item.id)
     db.refresh(item)
@@ -177,6 +211,7 @@ def needs_changes_item(
     if not payload.comment:
         raise HTTPException(status_code=400, detail="Comment is required for needs changes")
 
+    previous_status = item.status
     item.status = "rejected"
     item.moderated_by = admin_user.id
     item.moderated_at = datetime.now(timezone.utc)
@@ -185,6 +220,15 @@ def needs_changes_item(
     _notify_owner(db, item, "item_needs_changes", payload.comment)
 
     db.add(item)
+    db.flush()
+
+    add_item_needs_changes_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=admin_user.id,
+        previous_status=previous_status,
+    )
+
     db.commit()
     invalidate_public_catalog_for_item(item.id)
     db.refresh(item)
