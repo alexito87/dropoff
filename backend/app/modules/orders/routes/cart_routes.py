@@ -5,12 +5,16 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, get_db
-from app.models.cart import Cart, CartItem
-from app.models.item import Item
+from app.modules.orders.models.cart import Cart, CartItem
+from app.modules.items.models.item import Item
 from app.models.item_image import ItemImage
 from app.models.rental import Rental
-from app.models.user import User
-from app.schemas.cart import CartItemCreate, CartRead, CartItemRead
+from app.modules.users.models.user import User
+from app.modules.orders.schemas.cart import (
+    CartItemCreate,
+    CartItemRead,
+    CartRead,
+)
 
 router = APIRouter()
 

@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.core.config import settings
-from app.models.category import Category
-from app.schemas.category import CategoryRead
+from app.modules.catalog.models.category import Category
+from app.modules.catalog.schemas.category import CategoryRead
 from app.services.cache import cache_service
 from app.services.cache_keys import categories_key
 from app.services.etag import build_etag

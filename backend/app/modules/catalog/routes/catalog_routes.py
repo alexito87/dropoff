@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_db
 from app.core.config import settings
-from app.models.item import Item
-from app.schemas.catalog import (
+from app.modules.items.models.item import Item
+from app.modules.catalog.schemas.catalog import (
     CatalogItemCard,
     CatalogItemDetails,
     CatalogItemImagePublic,

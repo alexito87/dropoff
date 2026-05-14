@@ -6,9 +6,14 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.core.security import create_access_token, get_password_hash, verify_password
-from app.models.email_verification_token import EmailVerificationToken
-from app.models.user import User
-from app.schemas.auth import LoginRequest, MessageResponse, SignupRequest, TokenResponse
+from app.modules.auth.models.email_verification_token import EmailVerificationToken
+from app.modules.users.models.user import User
+from app.modules.auth.schemas.auth import (
+    LoginRequest,
+    MessageResponse,
+    SignupRequest,
+    TokenResponse,
+)
 from app.services.email_service import send_verification_email
 
 router = APIRouter()
