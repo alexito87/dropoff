@@ -14,6 +14,7 @@ from app.models.rental import Rental
 from app.models.notification import Notification
 from app.models.audit_log_event import AuditLogEvent
 from app.models.email_verification_token import EmailVerificationToken
+from app.models.delivery import Delivery
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

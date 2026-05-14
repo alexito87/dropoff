@@ -10,6 +10,7 @@ from app.models.cart import Cart, CartItem
 from app.models.order import Order, OrderItem
 from app.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
 from app.models.outbox_event import OutboxEvent
+from app.models.delivery import Delivery
 
 __all__ = [
     "User",
@@ -29,4 +30,5 @@ __all__ = [
     "StripeCheckoutSession",
     "StripePaymentIntent",
     "OutboxEvent",
+    "Delivery",
 ]
