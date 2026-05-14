@@ -13,13 +13,13 @@ from app.events.payment_events import (
     add_checkout_session_created_event_to_outbox,
     add_payment_succeeded_event_to_outbox,
 )
-from app.models.cart import Cart, CartItem
+from app.modules.orders.models.cart import Cart, CartItem
 from app.models.item import Item
 from app.models.notification import Notification
-from app.models.order import Order, OrderItem
-from app.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
+from app.modules.orders.models.order import Order, OrderItem
+from app.modules.payments.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
 from app.models.user import User
-from app.schemas.order import (
+from app.modules.orders.schemas.order import (
     CheckoutSessionRead,
     OrderCreate,
     OrderItemRead,

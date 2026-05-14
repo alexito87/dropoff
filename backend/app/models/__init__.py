@@ -6,9 +6,9 @@ from app.models.email_verification_token import EmailVerificationToken
 from app.models.notification import Notification
 from app.modules.rentals.models.rental import Rental
 from app.models.audit_log_event import AuditLogEvent
-from app.models.cart import Cart, CartItem
-from app.models.order import Order, OrderItem
-from app.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
+from app.modules.orders.models.cart import Cart, CartItem
+from app.modules.orders.models.order import Order, OrderItem
+from app.modules.payments.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
 from app.models.outbox_event import OutboxEvent
 from app.models.delivery import Delivery
 

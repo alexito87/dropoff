@@ -12,9 +12,17 @@ from app.modules.items.models.item import Item
 from app.modules.items.models.item_image import ItemImage
 from app.modules.rentals.models.rental import Rental
 from app.modules.notifications.models.notification import Notification
-from app.models.audit_log_event import AuditLogEvent
+from app.modules.orders.models.order import Order, OrderItem
+from app.modules.orders.models.cart import Cart, CartItem
+from app.modules.payments.models.payment import (
+    Payment,
+    PaymentTransaction,
+    StripeCheckoutSession,
+    StripePaymentIntent,
+)
+from app.modules.deliveries.models.delivery import Delivery
 from app.modules.auth.models.email_verification_token import EmailVerificationToken
-from app.models.delivery import Delivery
+from app.models.audit_log_event import AuditLogEvent
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

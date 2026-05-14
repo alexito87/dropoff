@@ -8,7 +8,7 @@ from app.api.deps import get_current_user, get_db
 from app.modules.deliveries.models.delivery import Delivery
 from app.models.item import Item
 from app.models.notification import Notification
-from app.models.order import Order, OrderItem
+from app.modules.orders.models.order import Order, OrderItem
 from app.models.user import User
 from app.modules.deliveries.schemas.delivery import (
     DeliveryComplete,
