@@ -6,11 +6,15 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
-from app.models.item import Item
-from app.models.notification import Notification
-from app.models.rental import Rental
-from app.models.user import User
-from app.schemas.rental import RentalCreate, RentalDecisionPayload, RentalRead
+from app.modules.items.models.item import Item
+from app.modules.notifications.models.notification import Notification
+from app.modules.rentals.models.rental import Rental
+from app.modules.rentals.schemas.rental import (
+    RentalCreate,
+    RentalDecisionPayload,
+    RentalRead,
+)
+from app.modules.users.models.user import User
 
 router = APIRouter()
 

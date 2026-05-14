@@ -10,7 +10,7 @@ from app.modules.users.models.user import User
 from app.modules.catalog.models.category import Category
 from app.modules.items.models.item import Item
 from app.modules.items.models.item_image import ItemImage
-from app.models.rental import Rental
+from app.modules.rentals.models.rental import Rental
 from app.modules.notifications.models.notification import Notification
 from app.models.audit_log_event import AuditLogEvent
 from app.modules.auth.models.email_verification_token import EmailVerificationToken
