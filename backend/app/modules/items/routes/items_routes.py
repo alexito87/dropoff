@@ -13,11 +13,11 @@ from app.events.item_events import (
     add_item_submitted_for_moderation_event_to_outbox,
 )
 from app.models.category import Category
-from app.models.item import Item
-from app.models.item_image import ItemImage
+from app.modules.items.models.item import Item
+from app.modules.items.models.item_image import ItemImage
 from app.models.user import User
-from app.schemas.item import ItemCreate, ItemRead, ItemUpdate
-from app.schemas.item_image import ItemImageRead
+from app.modules.items.schemas.item import ItemCreate, ItemRead, ItemUpdate
+from app.modules.items.schemas.item_image import ItemImageRead
 from app.services.cache_invalidation import invalidate_public_catalog_if_published
 from app.services.image_url import build_versioned_image_url
 from app.services.supabase_storage_service import SupabaseStorageService

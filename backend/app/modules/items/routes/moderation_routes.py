@@ -12,11 +12,11 @@ from app.events.moderation_events import (
     add_item_rejected_event_to_outbox,
 )
 from app.events.notification_events import add_notification_created_event_to_outbox
-from app.models.item import Item
 from app.models.notification import Notification
-from app.models.user import User
-from app.schemas.item import ItemRead
-from app.schemas.item_image import ItemImageRead
+from app.modules.items.models.item import Item
+from app.modules.items.schemas.item import ItemRead
+from app.modules.items.schemas.item_image import ItemImageRead
+from app.modules.users.models.user import User
 from app.services.cache_invalidation import invalidate_public_catalog_for_item
 from app.services.image_url import build_versioned_image_url
 
