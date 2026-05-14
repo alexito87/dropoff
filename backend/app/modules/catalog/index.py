@@ -1,21 +1,18 @@
-# index.py
-# Точка подключения модуля к серверу
-
 from fastapi import APIRouter
 
-# Создаём роутер модуля
+from app.modules.catalog.routes.catalog_routes import router as catalog_routes
+from app.modules.catalog.routes.category_routes import router as category_routes
+
 router = APIRouter()
 
-# Импортируем эндпоинты (роуты) модуля
-# from .routes import <route_files>
-# Например:
-# from .routes.user_routes import router as user_router
-# router.include_router(user_router)
+router.include_router(
+    category_routes,
+    prefix="/categories",
+    tags=["categories"],
+)
 
-# Здесь можно подключать сервисы и контроллеры при необходимости
-
-def include_module(app):
-    """
-    Подключение модуля к FastAPI приложению
-    """
-    app.include_router(router, prefix=f"/{router.tags[0] if router.tags else 'module'}")
+router.include_router(
+    catalog_routes,
+    prefix="/catalog",
+    tags=["catalog"],
+)

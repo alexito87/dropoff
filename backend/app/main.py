@@ -2,6 +2,8 @@ from fastapi import FastAPI
 
 from app.api.v1.api import api_router as legacy_api_router
 from app.modules.auth.index import router as auth_router
+from app.modules.catalog.index import router as catalog_router
+from app.modules.items.index import router as items_router
 from app.modules.users.index import router as users_router
 
 
@@ -19,5 +21,7 @@ async def root():
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
+app.include_router(catalog_router, prefix="/api/v1")
+app.include_router(items_router, prefix="/api/v1")
 app.include_router(legacy_api_router, prefix="/api/v1")
 
