@@ -2,7 +2,7 @@
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
-from app.models.category import Category
+from app.modules.catalog.models.category import Category
 
 DEFAULT_CATEGORIES = [
     "Инструменты",
