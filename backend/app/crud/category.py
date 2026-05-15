@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.category import Category
+from app.modules.catalog.models.category import Category
 
 
 def get_categories(db: Session) -> list[Category]:
