@@ -5,16 +5,21 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, get_db
-from app.modules.orders.models.cart import Cart, CartItem
-from app.modules.items.models.item import Item
+from app.events.cart_events import (
+    add_cart_cleared_event_to_outbox,
+    add_cart_item_added_event_to_outbox,
+    add_cart_item_removed_event_to_outbox,
+)
 from app.models.item_image import ItemImage
 from app.models.rental import Rental
-from app.modules.users.models.user import User
+from app.modules.items.models.item import Item
+from app.modules.orders.models.cart import Cart, CartItem
 from app.modules.orders.schemas.cart import (
     CartItemCreate,
     CartItemRead,
     CartRead,
 )
+from app.modules.users.models.user import User
 
 router = APIRouter()
 
@@ -163,24 +168,33 @@ def add_item_to_cart(
         existing.rent_total_cents = rent_total_cents
         existing.total_deposit_cents = total_deposit_cents
         existing.updated_at = datetime.now(timezone.utc)
-        db.add(existing)
+        cart_item = existing
+        db.add(cart_item)
     else:
-        db.add(
-            CartItem(
-                cart_id=cart.id,
-                item_id=item.id,
-                rent_start=payload.rent_start,
-                rent_end=payload.rent_end,
-                quantity=payload.quantity,
-                daily_price_cents=item.daily_price_cents,
-                deposit_cents=item.deposit_cents,
-                rent_total_cents=rent_total_cents,
-                total_deposit_cents=total_deposit_cents,
-            )
+        cart_item = CartItem(
+            cart_id=cart.id,
+            item_id=item.id,
+            rent_start=payload.rent_start,
+            rent_end=payload.rent_end,
+            quantity=payload.quantity,
+            daily_price_cents=item.daily_price_cents,
+            deposit_cents=item.deposit_cents,
+            rent_total_cents=rent_total_cents,
+            total_deposit_cents=total_deposit_cents,
         )
+        db.add(cart_item)
 
     cart.updated_at = datetime.now(timezone.utc)
     db.add(cart)
+    db.flush()
+
+    add_cart_item_added_event_to_outbox(
+        db,
+        cart=cart,
+        cart_item=cart_item,
+        user_id=current_user.id,
+    )
+
     db.commit()
     db.refresh(cart)
     return _cart_to_read(db, cart)
@@ -200,6 +214,13 @@ def remove_cart_item(
     if not cart_item:
         raise HTTPException(status_code=404, detail="Cart item not found")
 
+    add_cart_item_removed_event_to_outbox(
+        db,
+        cart=cart,
+        cart_item=cart_item,
+        user_id=current_user.id,
+    )
+
     db.delete(cart_item)
     cart.updated_at = datetime.now(timezone.utc)
     db.add(cart)
@@ -215,6 +236,15 @@ def clear_cart(
     cart = db.query(Cart).filter(Cart.user_id == current_user.id, Cart.status == "active").first()
     if not cart:
         return CartRead()
+
+    items_count = db.query(CartItem).filter(CartItem.cart_id == cart.id).count()
+
+    add_cart_cleared_event_to_outbox(
+        db,
+        cart=cart,
+        user_id=current_user.id,
+        items_count=items_count,
+    )
 
     db.query(CartItem).filter(CartItem.cart_id == cart.id).delete()
     cart.updated_at = datetime.now(timezone.utc)

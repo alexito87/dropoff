@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.events.outbox import add_event_to_outbox
 from app.events.schemas import EventEnvelope
-from app.events.topics import CATALOG_EVENTS_TOPIC, MODERATION_EVENTS_TOPIC
+from app.events.topics import ITEM_EVENTS_TOPIC
 
 
 def _item_payload(item) -> dict:
@@ -31,7 +31,6 @@ def add_item_created_event_to_outbox(
     item,
     actor_user_id,
 ) -> None:
-    """Создает событие после создания вещи в статусе draft."""
     event = EventEnvelope(
         event_type="item.created",
         producer="items-endpoint",
@@ -45,7 +44,62 @@ def add_item_created_event_to_outbox(
 
     add_event_to_outbox(
         db,
-        topic=CATALOG_EVENTS_TOPIC,
+        topic=ITEM_EVENTS_TOPIC,
+        event=event,
+        key=str(item.id),
+    )
+
+
+def add_item_updated_event_to_outbox(
+    db: Session,
+    *,
+    item,
+    actor_user_id,
+    previous_status: str | None = None,
+) -> None:
+    event = EventEnvelope(
+        event_type="item.updated",
+        producer="items-endpoint",
+        aggregate_type="Item",
+        aggregate_id=str(item.id),
+        data={
+            **_item_payload(item),
+            "actor_user_id": str(actor_user_id),
+            "previous_status": previous_status,
+            "target_status": item.status,
+        },
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=ITEM_EVENTS_TOPIC,
+        event=event,
+        key=str(item.id),
+    )
+
+
+def add_item_deleted_event_to_outbox(
+    db: Session,
+    *,
+    item,
+    actor_user_id,
+    previous_status: str,
+) -> None:
+    event = EventEnvelope(
+        event_type="item.deleted",
+        producer="items-endpoint",
+        aggregate_type="Item",
+        aggregate_id=str(item.id),
+        data={
+            **_item_payload(item),
+            "actor_user_id": str(actor_user_id),
+            "previous_status": previous_status,
+        },
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=ITEM_EVENTS_TOPIC,
         event=event,
         key=str(item.id),
     )
@@ -58,7 +112,6 @@ def add_item_submitted_for_moderation_event_to_outbox(
     actor_user_id,
     previous_status: str,
 ) -> None:
-    """Создает событие после отправки вещи владельцем на модерацию."""
     event = EventEnvelope(
         event_type="item.submitted_for_moderation",
         producer="items-endpoint",
@@ -75,7 +128,64 @@ def add_item_submitted_for_moderation_event_to_outbox(
 
     add_event_to_outbox(
         db,
-        topic=MODERATION_EVENTS_TOPIC,
+        topic=ITEM_EVENTS_TOPIC,
+        event=event,
+        key=str(item.id),
+    )
+
+
+def add_item_published_event_to_outbox(
+    db: Session,
+    *,
+    item,
+    moderator_user_id,
+    previous_status: str,
+) -> None:
+    event = EventEnvelope(
+        event_type="item.published",
+        producer="moderation-endpoint",
+        aggregate_type="Item",
+        aggregate_id=str(item.id),
+        data={
+            **_item_payload(item),
+            "moderator_user_id": str(moderator_user_id),
+            "previous_status": previous_status,
+            "target_status": item.status,
+        },
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=ITEM_EVENTS_TOPIC,
+        event=event,
+        key=str(item.id),
+    )
+
+
+def add_item_rejected_event_to_outbox(
+    db: Session,
+    *,
+    item,
+    moderator_user_id,
+    previous_status: str,
+) -> None:
+    event = EventEnvelope(
+        event_type="item.rejected",
+        producer="moderation-endpoint",
+        aggregate_type="Item",
+        aggregate_id=str(item.id),
+        data={
+            **_item_payload(item),
+            "moderator_user_id": str(moderator_user_id),
+            "previous_status": previous_status,
+            "target_status": item.status,
+            "moderation_comment": item.moderation_comment,
+        },
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=ITEM_EVENTS_TOPIC,
         event=event,
         key=str(item.id),
     )
