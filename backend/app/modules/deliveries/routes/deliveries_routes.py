@@ -5,17 +5,22 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
-from app.modules.deliveries.models.delivery import Delivery
+from app.events.delivery_events import (
+    add_delivery_completed_event_to_outbox,
+    add_delivery_created_event_to_outbox,
+    add_delivery_return_requested_event_to_outbox,
+)
 from app.models.item import Item
 from app.models.notification import Notification
-from app.modules.orders.models.order import Order, OrderItem
 from app.models.user import User
+from app.modules.deliveries.models.delivery import Delivery
 from app.modules.deliveries.schemas.delivery import (
     DeliveryComplete,
     DeliveryCreate,
     DeliveryRead,
     DeliveryReturnRequest,
 )
+from app.modules.orders.models.order import Order, OrderItem
 
 router = APIRouter()
 
@@ -141,6 +146,13 @@ def start_delivery(
     db.add(delivery)
     db.add(order_item)
     db.add(order)
+    db.flush()
+
+    add_delivery_created_event_to_outbox(
+        db,
+        delivery=delivery,
+        actor_user_id=current_user.id,
+    )
 
     _create_notification(
         db,
@@ -223,6 +235,13 @@ def complete_delivery(
 
     db.add(delivery)
     db.add(order_item)
+    db.flush()
+
+    add_delivery_completed_event_to_outbox(
+        db,
+        delivery=delivery,
+        actor_user_id=current_user.id,
+    )
 
     _create_notification(
         db,
@@ -293,6 +312,13 @@ def request_delivery_return(
     db.add(delivery)
     db.add(order_item)
     db.add(order)
+    db.flush()
+
+    add_delivery_return_requested_event_to_outbox(
+        db,
+        delivery=delivery,
+        actor_user_id=current_user.id,
+    )
 
     _create_notification(
         db,

@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     kafka_client_id: str = "dropoff-backend"
     kafka_enabled: bool = True
 
+    outbox_publisher_enabled: bool = True
+    outbox_publisher_interval_seconds: float = 5.0
+    outbox_publisher_batch_size: int = 25
+
     cache_ttl_categories_seconds: int = 3600
     cache_ttl_item_details_seconds: int = 300
     cache_ttl_listing_details_seconds: int = 300
@@ -131,6 +135,18 @@ class Settings(BaseSettings):
     @property
     def KAFKA_ENABLED(self) -> bool:
         return self.kafka_enabled
+
+    @property
+    def OUTBOX_PUBLISHER_ENABLED(self) -> bool:
+        return self.outbox_publisher_enabled
+
+    @property
+    def OUTBOX_PUBLISHER_INTERVAL_SECONDS(self) -> float:
+        return self.outbox_publisher_interval_seconds
+
+    @property
+    def OUTBOX_PUBLISHER_BATCH_SIZE(self) -> int:
+        return self.outbox_publisher_batch_size
 
     @property
     def CACHE_TTL_CATEGORIES_SECONDS(self) -> int:

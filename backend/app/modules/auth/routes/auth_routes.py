@@ -6,14 +6,18 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.core.security import create_access_token, get_password_hash, verify_password
+from app.events.user_events import (
+    add_user_created_event_to_outbox,
+    add_user_email_verified_event_to_outbox,
+)
 from app.modules.auth.models.email_verification_token import EmailVerificationToken
-from app.modules.users.models.user import User
 from app.modules.auth.schemas.auth import (
     LoginRequest,
     MessageResponse,
     SignupRequest,
     TokenResponse,
 )
+from app.modules.users.models.user import User
 from app.services.email_service import send_verification_email
 
 router = APIRouter()
@@ -33,6 +37,11 @@ def signup(payload: SignupRequest, db: Session = Depends(get_db)) -> MessageResp
 
     db.add(user)
     db.flush()
+
+    add_user_created_event_to_outbox(
+        db,
+        user=user,
+    )
 
     token = EmailVerificationToken(
         user_id=user.id,
@@ -86,6 +95,15 @@ def verify_email(token: str = Query(...), db: Session = Depends(get_db)) -> Mess
 
     user.email_verified = True
     record.used_at = datetime.now(timezone.utc)
+
+    db.add(user)
+    db.add(record)
+    db.flush()
+
+    add_user_email_verified_event_to_outbox(
+        db,
+        user=user,
+    )
 
     db.commit()
 

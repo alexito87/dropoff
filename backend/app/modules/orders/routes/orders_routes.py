@@ -7,10 +7,19 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
-from app.events.order_events import add_order_created_event_to_outbox
+from app.events.cart_events import add_cart_converted_to_order_event_to_outbox
 from app.events.notification_events import add_notification_created_event_to_outbox
+from app.events.order_events import (
+    add_order_created_event_to_outbox,
+    add_order_paid_event_to_outbox,
+    add_order_payment_expired_event_to_outbox,
+    add_order_payment_failed_event_to_outbox,
+)
 from app.events.payment_events import (
     add_checkout_session_created_event_to_outbox,
+    add_payment_created_event_to_outbox,
+    add_payment_expired_event_to_outbox,
+    add_payment_failed_event_to_outbox,
     add_payment_succeeded_event_to_outbox,
 )
 from app.modules.orders.models.cart import Cart, CartItem
@@ -305,6 +314,7 @@ def _sync_stripe_session_state(
     payment_intent_id = _get_payment_intent_id(stripe_session)
     now = _now()
     was_paid_before_sync = payment.status == "paid"
+    was_terminal_before_sync = payment.status in PAYMENT_TERMINAL_STATUSES
 
     checkout_session = (
         db.query(StripeCheckoutSession)
@@ -410,6 +420,12 @@ def _sync_stripe_session_state(
         )
 
         if not was_paid_before_sync:
+            add_order_paid_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+            )
+
             add_payment_succeeded_event_to_outbox(
                 db,
                 order=order,
@@ -421,11 +437,40 @@ def _sync_stripe_session_state(
         order.status = "payment_expired"
         payment.status = "expired"
         payment.cancelled_at = payment.cancelled_at or now
+
+        if not was_terminal_before_sync:
+            add_order_payment_expired_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+            )
+
+            add_payment_expired_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+            )
+
     elif payment_status == "unpaid" and session_status == "complete":
         order.status = "payment_failed"
         payment.status = "failed"
         payment.failed_at = payment.failed_at or now
-    else:
+
+        if not was_terminal_before_sync:
+            add_order_payment_failed_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+                error_message="Stripe checkout session completed without paid status",
+            )
+
+            add_payment_failed_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+                error_message="Stripe checkout session completed without paid status",
+            )
+    else: 
         if payment.status not in PAYMENT_TERMINAL_STATUSES:
             payment.status = "processing"
 
@@ -514,6 +559,11 @@ def create_order_from_cart(
         db.add(payment)
         db.flush()
 
+        add_payment_created_event_to_outbox(
+            db,
+            payment=payment,
+        )
+
         owner_ids = set()
         for cart_item in cart_items:
             item = db.query(Item).filter(Item.id == cart_item.item_id).first()
@@ -576,6 +626,13 @@ def create_order_from_cart(
             payment=payment,
             cart=cart,
             cart_items=cart_items,
+            user_id=current_user.id,
+        )
+
+        add_cart_converted_to_order_event_to_outbox(
+            db,
+            cart=cart,
+            order=order,
             user_id=current_user.id,
         )
 
@@ -872,6 +929,7 @@ def create_checkout_session(
             .filter(StripeCheckoutSession.id == local_session.id)
             .first()
         )
+
         if payment:
             payment.status = "failed"
             payment.failed_at = _now()
@@ -884,14 +942,32 @@ def create_checkout_session(
                 error_message=str(exc),
             )
             db.add(payment)
+
         if order:
             order.status = "payment_failed"
             order.updated_at = _now()
             db.add(order)
+
+        if order and payment:
+            add_order_payment_failed_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+                error_message=str(exc),
+            )
+
+            add_payment_failed_event_to_outbox(
+                db,
+                order=order,
+                payment=payment,
+                error_message=str(exc),
+            )
+
         if local_session:
             local_session.status = "failed"
             local_session.updated_at = _now()
             db.add(local_session)
+
         db.commit()
         raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}")
 
@@ -1064,6 +1140,12 @@ def mark_order_paid_in_sandbox(
         db.add(order_item)
 
     _add_transaction(db, payment, tx_type="sandbox_payment_succeeded", tx_status="success")
+
+    add_order_paid_event_to_outbox(
+        db,
+        order=order,
+        payment=payment,
+    )
 
     add_payment_succeeded_event_to_outbox(
         db,

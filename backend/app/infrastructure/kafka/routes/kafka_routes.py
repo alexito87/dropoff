@@ -1,15 +1,15 @@
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import get_current_admin, get_db
 from app.events.kafka_health import check_kafka_connection
-from app.events.outbox import add_event_to_outbox
+from app.events.outbox_monitoring import (
+    get_outbox_summary,
+    get_recent_outbox_events,
+)
 from app.events.outbox_publisher import publish_pending_outbox_events
-from app.events.producer import kafka_event_producer
-from app.events.schemas import EventEnvelope
-from app.events.topics import ALL_TOPICS, AUDIT_EVENTS_TOPIC
+from app.events.topics import ALL_TOPICS
+from app.modules.users.models.user import User
 
 router = APIRouter()
 
@@ -25,82 +25,40 @@ async def kafka_health():
     }
 
 
-@router.post("/test-event")
-async def publish_test_event():
-    aggregate_id = str(uuid4())
-
-    event = EventEnvelope(
-        event_type="audit.test_event_published",
-        producer="dropoff-backend",
-        aggregate_type="KafkaTestEvent",
-        aggregate_id=aggregate_id,
-        data={
-            "message": "Kafka test event from DropOff backend",
-            "source": "POST /api/v1/kafka/test-event",
-        },
-    )
-
-    publish_result = await kafka_event_producer.publish(
-        topic=AUDIT_EVENTS_TOPIC,
-        event=event,
-        key=aggregate_id,
-    )
-
+@router.get("/outbox/summary")
+def read_outbox_summary(
+    admin_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
     return {
-        "service": "kafka",
-        "status": "published",
-        "result": publish_result,
-        "event": event.to_kafka_dict(),
+        "service": "outbox",
+        "summary": get_outbox_summary(db),
     }
 
 
-@router.post("/test-outbox-event")
-def create_test_outbox_event(db: Session = Depends(get_db)):
-    aggregate_id = str(uuid4())
-
-    event = EventEnvelope(
-        event_type="audit.test_outbox_event_created",
-        producer="dropoff-backend",
-        aggregate_type="OutboxTestEvent",
-        aggregate_id=aggregate_id,
-        data={
-            "message": "Outbox test event from DropOff backend",
-            "source": "POST /api/v1/kafka/test-outbox-event",
-        },
-    )
-
-    outbox_event = add_event_to_outbox(
-        db,
-        topic=AUDIT_EVENTS_TOPIC,
-        event=event,
-        key=aggregate_id,
-    )
-
-    db.commit()
-    db.refresh(outbox_event)
-
+@router.get("/outbox/events")
+def read_recent_outbox_events(
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    topic: str | None = Query(default=None),
+    admin_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
     return {
         "service": "outbox",
-        "status": "pending",
-        "outbox_event": {
-            "id": str(outbox_event.id),
-            "topic": outbox_event.topic,
-            "event_key": outbox_event.event_key,
-            "event_type": outbox_event.event_type,
-            "aggregate_type": outbox_event.aggregate_type,
-            "aggregate_id": outbox_event.aggregate_id,
-            "status": outbox_event.status,
-            "retry_count": outbox_event.retry_count,
-            "created_at": outbox_event.created_at,
-            "published_at": outbox_event.published_at,
-        },
-        "event": event.to_kafka_dict(),
+        "events": get_recent_outbox_events(
+            db,
+            limit=limit,
+            status=status,
+            topic=topic,
+        ),
     }
 
 
 @router.post("/publish-outbox")
 async def publish_outbox_events(
     limit: int = Query(default=10, ge=1, le=100),
+    admin_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
     publish_result = await publish_pending_outbox_events(db, limit=limit)

@@ -10,12 +10,14 @@ from app.api.deps import get_current_user, get_db
 from app.core.config import settings
 from app.events.item_events import (
     add_item_created_event_to_outbox,
+    add_item_deleted_event_to_outbox,
     add_item_submitted_for_moderation_event_to_outbox,
+    add_item_updated_event_to_outbox,
 )
 from app.models.category import Category
+from app.models.user import User
 from app.modules.items.models.item import Item
 from app.modules.items.models.item_image import ItemImage
-from app.models.user import User
 from app.modules.items.schemas.item import ItemCreate, ItemRead, ItemUpdate
 from app.modules.items.schemas.item_image import ItemImageRead
 from app.services.cache_invalidation import invalidate_public_catalog_if_published
@@ -160,6 +162,15 @@ def update_item(item_id: UUID, payload: ItemUpdate, current_user: User = Depends
         setattr(item, field, value)
 
     db.add(item)
+    db.flush()
+
+    add_item_updated_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=current_user.id,
+        previous_status=old_status,
+    )
+
     db.commit()
     invalidate_public_catalog_if_published(item.id, old_status)
     db.refresh(item)
@@ -178,6 +189,13 @@ def delete_item(item_id: UUID, current_user: User = Depends(get_current_user), d
             storage.remove_file(image.storage_path)
         except Exception:
             pass
+
+    add_item_deleted_event_to_outbox(
+        db,
+        item=item,
+        actor_user_id=current_user.id,
+        previous_status=old_status,
+    )
 
     db.delete(item)
     db.commit()
