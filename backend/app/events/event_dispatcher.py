@@ -54,6 +54,12 @@ from app.events.handlers.payments_handlers import (
     handle_payment_failed,
     handle_payment_succeeded,
 )
+from app.events.handlers.rentals_handlers import (
+    handle_rental_cancelled,
+    handle_rental_completed,
+    handle_rental_created,
+    handle_rental_started,
+)
 from app.events.handlers.users_handlers import (
     handle_user_created,
     handle_user_email_verified,
@@ -101,6 +107,11 @@ EVENT_HANDLERS: dict[str, EventHandler] = {
     "delivery.completed": handle_delivery_completed,
     "delivery.return_requested": handle_delivery_return_requested,
     "delivery.cancelled": handle_delivery_cancelled,
+
+    "rental.created": handle_rental_created,
+    "rental.started": handle_rental_started,
+    "rental.completed": handle_rental_completed,
+    "rental.cancelled": handle_rental_cancelled,
 
     "notification.created": handle_notification_created,
 
