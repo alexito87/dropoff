@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.events.delivery_events import add_delivery_created_event_to_outbox
 from app.events.order_events import (
     add_order_paid_event_to_outbox,
     add_order_payment_expired_event_to_outbox,
@@ -13,6 +14,7 @@ from app.events.outbox import add_event_to_outbox
 from app.events.projection_utils import get_event_data, parse_event_datetime
 from app.events.schemas import EventEnvelope
 from app.events.topics import PAYMENT_EVENTS_TOPIC
+from app.modules.deliveries.models.delivery import Delivery
 from app.modules.orders.models.order import Order, OrderItem
 from app.modules.payments.models.payment import Payment
 
@@ -423,4 +425,316 @@ def apply_payment_event_to_order(
         "event_type": event_type,
         "order_id": str(order.id),
         "payment_id": str(payment.id) if payment else data.get("payment_id"),
+    }
+
+
+def _find_order_for_delivery_event(
+    db: Session,
+    data: dict[str, Any],
+) -> Order | None:
+    order_id = _parse_uuid(data.get("order_id"))
+
+    if order_id:
+        return db.query(Order).filter(Order.id == order_id).first()
+
+    return None
+
+
+def _find_order_item_for_delivery_event(
+    db: Session,
+    data: dict[str, Any],
+) -> OrderItem | None:
+    order_item_id = _parse_uuid(data.get("order_item_id"))
+
+    if order_item_id:
+        return db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+
+    return None
+
+
+def _find_delivery_for_event(
+    db: Session,
+    data: dict[str, Any],
+) -> Delivery | None:
+    delivery_id = _parse_uuid(data.get("delivery_id"))
+
+    if delivery_id:
+        delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
+
+        if delivery:
+            return delivery
+
+    order_item_id = _parse_uuid(data.get("order_item_id"))
+
+    if order_item_id:
+        return (
+            db.query(Delivery)
+            .filter(Delivery.order_item_id == order_item_id)
+            .first()
+        )
+
+    return None
+
+
+def _all_order_items_have_status(
+    db: Session,
+    *,
+    order_id: uuid.UUID,
+    status: str,
+) -> bool:
+    order_items = (
+        db.query(OrderItem)
+        .filter(OrderItem.order_id == order_id)
+        .all()
+    )
+
+    if not order_items:
+        return False
+
+    return all(order_item.status == status for order_item in order_items)
+
+
+def ensure_deliveries_for_order_paid_event(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+    order_id = _parse_uuid(data.get("order_id"))
+
+    if order_id is None:
+        return {
+            "deliveries_created": 0,
+            "reason": "invalid_order_id",
+        }
+
+    order = db.query(Order).filter(Order.id == order_id).first()
+
+    if order is None:
+        return {
+            "deliveries_created": 0,
+            "reason": "order_not_found",
+            "order_id": str(order_id),
+        }
+
+    order_items = (
+        db.query(OrderItem)
+        .filter(OrderItem.order_id == order.id)
+        .all()
+    )
+
+    if not order_items:
+        return {
+            "deliveries_created": 0,
+            "reason": "order_has_no_items",
+            "order_id": str(order.id),
+        }
+
+    created_deliveries: list[str] = []
+    existing_deliveries: list[str] = []
+
+    for order_item in order_items:
+        existing_delivery = (
+            db.query(Delivery)
+            .filter(Delivery.order_item_id == order_item.id)
+            .first()
+        )
+
+        if existing_delivery:
+            existing_deliveries.append(str(existing_delivery.id))
+            continue
+
+        delivery = Delivery(
+            order_id=order.id,
+            order_item_id=order_item.id,
+            renter_id=order.user_id,
+            owner_id=order_item.owner_id,
+            item_id=order_item.item_id,
+            status="in_progress",
+            started_at=_now(),
+            created_at=_now(),
+            updated_at=_now(),
+        )
+
+        db.add(delivery)
+        db.flush()
+
+        if order_item.status != "in_delivery":
+            order_item.status = "in_delivery"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        add_delivery_created_event_to_outbox(
+            db,
+            delivery=delivery,
+            actor_user_id=order.user_id,
+        )
+
+        created_deliveries.append(str(delivery.id))
+
+    return {
+        "deliveries_created": len(created_deliveries),
+        "existing_deliveries": existing_deliveries,
+        "created_delivery_ids": created_deliveries,
+        "reason": "deliveries_created_from_order_paid_event",
+        "order_id": str(order.id),
+    }
+
+
+def apply_delivery_event_to_order(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+    event_type = str(event.get("event_type") or "")
+    occurred_at = _event_time_or_now(event)
+
+    delivery = _find_delivery_for_event(db, data)
+    order = _find_order_for_delivery_event(db, data)
+    order_item = _find_order_item_for_delivery_event(db, data)
+
+    if order is None and delivery:
+        order = db.query(Order).filter(Order.id == delivery.order_id).first()
+
+    if order_item is None and delivery:
+        order_item = (
+            db.query(OrderItem)
+            .filter(OrderItem.id == delivery.order_item_id)
+            .first()
+        )
+
+    if order is None:
+        return {
+            "order_updated": False,
+            "reason": "order_not_found",
+            "event_type": event_type,
+            "order_id": data.get("order_id"),
+            "delivery_id": data.get("delivery_id"),
+        }
+
+    if delivery:
+        delivery.current_location = data.get("current_location") or delivery.current_location
+        delivery.final_location = data.get("final_location") or delivery.final_location
+        delivery.return_reason = data.get("return_reason") or delivery.return_reason
+        delivery.updated_at = _now()
+        db.add(delivery)
+
+    if event_type == "delivery.created":
+        if delivery:
+            delivery.status = data.get("status") or delivery.status or "in_progress"
+            delivery.updated_at = _now()
+            db.add(delivery)
+
+        if order_item and order_item.status not in {"in_delivery", "active"}:
+            order_item.status = "in_delivery"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        return {
+            "order_updated": False,
+            "reason": "delivery_created_marked_order_item_in_delivery",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+            "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+        }
+
+    if event_type == "delivery.completed":
+        if delivery:
+            delivery.status = "delivered"
+            delivery.finished_at = delivery.finished_at or occurred_at
+            delivery.updated_at = _now()
+            db.add(delivery)
+
+        if order_item:
+            order_item.status = "active"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        if _all_order_items_have_status(db, order_id=order.id, status="active"):
+            if order.status != "active":
+                order.status = "active"
+                order.updated_at = _now()
+                db.add(order)
+
+                return {
+                    "order_updated": True,
+                    "reason": "all_deliveries_delivered_order_activated",
+                    "order_id": str(order.id),
+                    "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+                    "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+                    "published_event": None,
+                }
+
+            return {
+                "order_updated": False,
+                "reason": "order_already_active",
+                "order_id": str(order.id),
+                "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+                "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+            }
+
+        return {
+            "order_updated": False,
+            "reason": "delivery_delivered_waiting_for_other_order_items",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+            "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+        }
+
+    if event_type == "delivery.return_requested":
+        if delivery:
+            delivery.status = "return_requested"
+            delivery.return_reason = data.get("return_reason") or delivery.return_reason
+            delivery.updated_at = _now()
+            db.add(delivery)
+
+        if order_item:
+            order_item.status = "return_requested"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        if order.status != "return_requested":
+            order.status = "return_requested"
+            order.updated_at = _now()
+            db.add(order)
+
+        return {
+            "order_updated": True,
+            "reason": "delivery_return_requested_applied_to_order",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+            "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+        }
+
+    if event_type == "delivery.cancelled":
+        if delivery:
+            delivery.status = "cancelled"
+            delivery.finished_at = delivery.finished_at or occurred_at
+            delivery.updated_at = _now()
+            db.add(delivery)
+
+        if order_item:
+            order_item.status = "delivery_cancelled"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        if order.status != "delivery_cancelled":
+            order.status = "delivery_cancelled"
+            order.updated_at = _now()
+            db.add(order)
+
+        return {
+            "order_updated": True,
+            "reason": "delivery_cancelled_applied_to_order",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+            "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+        }
+
+    return {
+        "order_updated": False,
+        "reason": "delivery_event_does_not_require_order_change",
+        "event_type": event_type,
+        "order_id": str(order.id),
+        "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
+        "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
     }
