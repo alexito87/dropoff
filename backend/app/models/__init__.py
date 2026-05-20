@@ -17,6 +17,21 @@ from app.modules.deliveries.models.delivery import Delivery
 
 from app.models.audit_log_event import AuditLogEvent
 from app.models.outbox_event import OutboxEvent
+from app.models.consumed_kafka_event import ConsumedKafkaEvent
+from app.models.dead_letter_kafka_event import DeadLetterKafkaEvent
+from app.models.processed_domain_event import ProcessedDomainEvent
+from app.models.event_projection import (
+    AuditDomainEventProjection,
+    CatalogItemProjection,
+    DeliveriesOrderProjection,
+    ModerationItemProjection,
+    NotificationsUserProjection,
+    OrdersCartProjection,
+    OrdersDeliveryProjection,
+    OrdersItemProjection,
+    OrdersPaymentProjection,
+    PaymentsOrderProjection,
+)
 
 __all__ = [
     "User",
@@ -37,4 +52,17 @@ __all__ = [
     "Delivery",
     "AuditLogEvent",
     "OutboxEvent",
+    "ConsumedKafkaEvent",
+    "DeadLetterKafkaEvent",
+    "ProcessedDomainEvent",
+    "CatalogItemProjection",
+    "ModerationItemProjection",
+    "OrdersItemProjection",
+    "OrdersCartProjection",
+    "PaymentsOrderProjection",
+    "DeliveriesOrderProjection",
+    "OrdersPaymentProjection",
+    "OrdersDeliveryProjection",
+    "NotificationsUserProjection",
+    "AuditDomainEventProjection",
 ]
