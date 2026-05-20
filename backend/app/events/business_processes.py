@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.events.delivery_events import add_delivery_created_event_to_outbox
 from app.events.order_events import (
     add_order_activated_event_to_outbox,
+    add_order_completed_event_to_outbox,
     add_order_paid_event_to_outbox,
     add_order_payment_expired_event_to_outbox,
     add_order_payment_failed_event_to_outbox,
@@ -18,6 +19,7 @@ from app.events.topics import PAYMENT_EVENTS_TOPIC
 from app.modules.deliveries.models.delivery import Delivery
 from app.modules.orders.models.order import Order, OrderItem
 from app.modules.payments.models.payment import Payment
+from app.modules.rentals.models.rental import Rental
 
 
 def _now() -> datetime:
@@ -30,6 +32,19 @@ def _parse_uuid(value: Any) -> uuid.UUID | None:
 
     try:
         return uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_date(value: Any) -> date | None:
+    if value in (None, ""):
+        return None
+
+    if isinstance(value, date):
+        return value
+
+    try:
+        return date.fromisoformat(str(value))
     except (TypeError, ValueError):
         return None
 
@@ -743,4 +758,219 @@ def apply_delivery_event_to_order(
         "order_id": str(order.id),
         "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
         "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
+    }
+
+
+def _find_rental_for_event(
+    db: Session,
+    data: dict[str, Any],
+) -> Rental | None:
+    rental_id = _parse_uuid(data.get("rental_id"))
+
+    if rental_id:
+        rental = db.query(Rental).filter(Rental.id == rental_id).first()
+
+        if rental:
+            return rental
+
+    item_id = _parse_uuid(data.get("item_id"))
+    renter_id = _parse_uuid(data.get("renter_id"))
+
+    if item_id and renter_id:
+        return (
+            db.query(Rental)
+            .filter(
+                Rental.item_id == item_id,
+                Rental.renter_id == renter_id,
+            )
+            .order_by(Rental.updated_at.desc())
+            .first()
+        )
+
+    return None
+
+
+def _find_order_item_for_rental_event(
+    db: Session,
+    data: dict[str, Any],
+) -> OrderItem | None:
+    item_id = _parse_uuid(data.get("item_id"))
+    renter_id = _parse_uuid(data.get("renter_id"))
+    start_date = _parse_date(data.get("start_date"))
+    end_date = _parse_date(data.get("end_date"))
+
+    if item_id is None or renter_id is None:
+        return None
+
+    query = (
+        db.query(OrderItem)
+        .join(Order, Order.id == OrderItem.order_id)
+        .filter(
+            OrderItem.item_id == item_id,
+            Order.user_id == renter_id,
+        )
+    )
+
+    if start_date is not None:
+        query = query.filter(OrderItem.rent_start == start_date)
+
+    if end_date is not None:
+        query = query.filter(OrderItem.rent_end == end_date)
+
+    return query.order_by(OrderItem.updated_at.desc()).first()
+
+
+def apply_rental_event_to_order(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+    event_type = str(event.get("event_type") or "")
+
+    rental = _find_rental_for_event(db, data)
+    order_item = _find_order_item_for_rental_event(db, data)
+
+    if order_item is None:
+        return {
+            "order_updated": False,
+            "reason": "order_item_not_found",
+            "event_type": event_type,
+            "rental_id": data.get("rental_id"),
+            "item_id": data.get("item_id"),
+            "renter_id": data.get("renter_id"),
+        }
+
+    order = db.query(Order).filter(Order.id == order_item.order_id).first()
+
+    if order is None:
+        return {
+            "order_updated": False,
+            "reason": "order_not_found",
+            "event_type": event_type,
+            "rental_id": data.get("rental_id"),
+            "order_item_id": str(order_item.id),
+        }
+
+    if event_type == "rental.created":
+        if rental and rental.status != data.get("status", rental.status):
+            rental.status = data.get("status", rental.status)
+            rental.updated_at = _now()
+            db.add(rental)
+
+        return {
+            "order_updated": False,
+            "reason": "rental_created_does_not_change_order_status",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "rental_id": str(rental.id) if rental else data.get("rental_id"),
+        }
+
+    if event_type == "rental.started":
+        if rental:
+            rental.status = "active"
+            rental.updated_at = _now()
+            db.add(rental)
+
+        if order_item.status != "active":
+            order_item.status = "active"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        if order.status != "active":
+            order.status = "active"
+            order.updated_at = _now()
+            db.add(order)
+
+            add_order_activated_event_to_outbox(
+                db,
+                order=order,
+            )
+
+        return {
+            "order_updated": True,
+            "reason": "rental_started_order_active",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "rental_id": str(rental.id) if rental else data.get("rental_id"),
+            "published_event": "order.activated",
+        }
+
+    if event_type == "rental.completed":
+        if rental:
+            rental.status = "completed"
+            rental.updated_at = _now()
+            db.add(rental)
+
+        if order_item.status != "completed":
+            order_item.status = "completed"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        if _all_order_items_have_status(db, order_id=order.id, status="completed"):
+            if order.status != "completed":
+                order.status = "completed"
+                order.updated_at = _now()
+                db.add(order)
+
+                add_order_completed_event_to_outbox(
+                    db,
+                    order=order,
+                )
+
+                return {
+                    "order_updated": True,
+                    "reason": "all_rentals_completed_order_completed",
+                    "order_id": str(order.id),
+                    "order_item_id": str(order_item.id),
+                    "rental_id": str(rental.id) if rental else data.get("rental_id"),
+                    "published_event": "order.completed",
+                }
+
+            return {
+                "order_updated": False,
+                "reason": "order_already_completed",
+                "order_id": str(order.id),
+                "order_item_id": str(order_item.id),
+                "rental_id": str(rental.id) if rental else data.get("rental_id"),
+            }
+
+        return {
+            "order_updated": False,
+            "reason": "rental_completed_waiting_for_other_order_items",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "rental_id": str(rental.id) if rental else data.get("rental_id"),
+        }
+
+    if event_type == "rental.cancelled":
+        if rental:
+            rental.status = "cancelled"
+            rental.updated_at = _now()
+            db.add(rental)
+
+        if order_item.status != "rental_cancelled":
+            order_item.status = "rental_cancelled"
+            order_item.updated_at = _now()
+            db.add(order_item)
+
+        if order.status != "rental_cancelled":
+            order.status = "rental_cancelled"
+            order.updated_at = _now()
+            db.add(order)
+
+        return {
+            "order_updated": True,
+            "reason": "rental_cancelled_applied_to_order",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "rental_id": str(rental.id) if rental else data.get("rental_id"),
+        }
+
+    return {
+        "order_updated": False,
+        "reason": "rental_event_does_not_require_order_change",
+        "event_type": event_type,
+        "order_id": str(order.id),
+        "order_item_id": str(order_item.id),
+        "rental_id": str(rental.id) if rental else data.get("rental_id"),
     }

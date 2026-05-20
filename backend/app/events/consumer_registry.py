@@ -9,6 +9,7 @@ from app.events.topics import (
     NOTIFICATION_EVENTS_TOPIC,
     ORDER_EVENTS_TOPIC,
     PAYMENT_EVENTS_TOPIC,
+    RENTAL_EVENTS_TOPIC,
     USER_EVENTS_TOPIC,
 )
 
@@ -47,6 +48,10 @@ KAFKA_CONSUMERS: list[KafkaConsumerConfig] = [
     KafkaConsumerConfig(
         name="deliveries-events-consumer",
         topic=DELIVERY_EVENTS_TOPIC,
+    ),
+    KafkaConsumerConfig(
+        name="rentals-events-consumer",
+        topic=RENTAL_EVENTS_TOPIC,
     ),
     KafkaConsumerConfig(
         name="notifications-events-consumer",

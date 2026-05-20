@@ -6,6 +6,12 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.events.rental_events import (
+    add_rental_cancelled_event_to_outbox,
+    add_rental_completed_event_to_outbox,
+    add_rental_created_event_to_outbox,
+    add_rental_started_event_to_outbox,
+)
 from app.modules.items.models.item import Item
 from app.modules.notifications.models.notification import Notification
 from app.modules.rentals.models.rental import Rental
@@ -17,6 +23,10 @@ from app.modules.rentals.schemas.rental import (
 from app.modules.users.models.user import User
 
 router = APIRouter()
+
+
+def _is_admin(user: User) -> bool:
+    return bool(getattr(user, "is_superuser", False))
 
 
 def _days_count(start_date, end_date) -> int:
@@ -59,18 +69,104 @@ def _create_notification(db: Session, user_id, notification_type: str, payload: 
     )
 
 
-def _get_owned_item_or_404(db: Session, item_id: UUID, owner_id: UUID) -> Item:
-    item = db.query(Item).filter(Item.id == item_id, Item.owner_id == owner_id).first()
+def _get_owned_item_or_404(
+    db: Session,
+    item_id: UUID,
+    owner_id: UUID,
+    *,
+    current_user: User,
+) -> Item:
+    item = db.query(Item).filter(Item.id == item_id).first()
+
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
+    if not _is_admin(current_user) and item.owner_id != owner_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     return item
 
 
 def _get_rental_or_404(db: Session, rental_id: UUID) -> Rental:
     rental = db.query(Rental).filter(Rental.id == rental_id).first()
+
     if not rental:
         raise HTTPException(status_code=404, detail="Rental not found")
+
     return rental
+
+
+def _get_item_or_404(db: Session, item_id: UUID) -> Item:
+    item = db.query(Item).filter(Item.id == item_id).first()
+
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    return item
+
+
+def _assert_can_read_rental(
+    *,
+    rental: Rental,
+    item: Item,
+    current_user: User,
+) -> None:
+    if _is_admin(current_user):
+        return
+
+    if rental.renter_id == current_user.id:
+        return
+
+    if item.owner_id == current_user.id:
+        return
+
+    raise HTTPException(status_code=403, detail="Access denied")
+
+
+def _assert_can_manage_as_owner(
+    *,
+    item: Item,
+    current_user: User,
+) -> None:
+    if _is_admin(current_user):
+        return
+
+    if item.owner_id == current_user.id:
+        return
+
+    raise HTTPException(status_code=403, detail="Only item owner can perform this action")
+
+
+def _assert_can_manage_as_renter(
+    *,
+    rental: Rental,
+    current_user: User,
+) -> None:
+    if _is_admin(current_user):
+        return
+
+    if rental.renter_id == current_user.id:
+        return
+
+    raise HTTPException(status_code=403, detail="Only renter can perform this action")
+
+
+def _assert_can_complete_rental(
+    *,
+    rental: Rental,
+    item: Item,
+    current_user: User,
+) -> None:
+    if _is_admin(current_user):
+        return
+
+    if item.owner_id == current_user.id:
+        return
+
+    if rental.renter_id == current_user.id:
+        return
+
+    raise HTTPException(status_code=403, detail="Only renter or owner can complete rental")
 
 
 def _has_approved_overlap(
@@ -102,6 +198,7 @@ def create_rental(
     db: Session = Depends(get_db),
 ):
     item = db.query(Item).filter(Item.id == payload.item_id, Item.status == "published").first()
+
     if not item:
         raise HTTPException(status_code=404, detail="Published item not found")
 
@@ -126,6 +223,7 @@ def create_rental(
     )
 
     db.add(rental)
+    db.flush()
 
     _create_notification(
         db,
@@ -139,8 +237,14 @@ def create_rental(
         },
     )
 
+    add_rental_created_event_to_outbox(
+        db,
+        rental=rental,
+    )
+
     db.commit()
     db.refresh(rental)
+
     return _to_rental_read(db, rental)
 
 
@@ -155,6 +259,7 @@ def read_my_rentals(
         .order_by(Rental.created_at.desc())
         .all()
     )
+
     return [_to_rental_read(db, rental) for rental in rentals]
 
 
@@ -170,6 +275,25 @@ def read_owner_rentals(
         .order_by(Rental.created_at.desc())
         .all()
     )
+
+    return [_to_rental_read(db, rental) for rental in rentals]
+
+
+@router.get("/admin", response_model=list[RentalRead])
+def read_all_rentals_as_admin(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only admin can read all rentals")
+
+    rentals = (
+        db.query(Rental)
+        .order_by(Rental.updated_at.desc())
+        .limit(100)
+        .all()
+    )
+
     return [_to_rental_read(db, rental) for rental in rentals]
 
 
@@ -180,13 +304,13 @@ def read_rental(
     db: Session = Depends(get_db),
 ):
     rental = _get_rental_or_404(db, rental_id)
-    item = db.query(Item).filter(Item.id == rental.item_id).first()
+    item = _get_item_or_404(db, rental.item_id)
 
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-
-    if rental.renter_id != current_user.id and item.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    _assert_can_read_rental(
+        rental=rental,
+        item=item,
+        current_user=current_user,
+    )
 
     return _to_rental_read(db, rental)
 
@@ -198,12 +322,29 @@ def approve_rental(
     db: Session = Depends(get_db),
 ):
     rental = _get_rental_or_404(db, rental_id)
-    item = _get_owned_item_or_404(db, rental.item_id, current_user.id)
+
+    item = _get_owned_item_or_404(
+        db,
+        rental.item_id,
+        current_user.id,
+        current_user=current_user,
+    )
+
+    _assert_can_manage_as_owner(
+        item=item,
+        current_user=current_user,
+    )
 
     if rental.status != "pending":
         raise HTTPException(status_code=400, detail="Only pending rental can be approved")
 
-    if _has_approved_overlap(db, rental.item_id, rental.start_date, rental.end_date, exclude_rental_id=rental.id):
+    if _has_approved_overlap(
+        db,
+        rental.item_id,
+        rental.start_date,
+        rental.end_date,
+        exclude_rental_id=rental.id,
+    ):
         raise HTTPException(
             status_code=400,
             detail="Cannot approve rental because dates overlap with another approved rental",
@@ -227,6 +368,7 @@ def approve_rental(
     db.add(rental)
     db.commit()
     db.refresh(rental)
+
     return _to_rental_read(db, rental)
 
 
@@ -238,7 +380,18 @@ def reject_rental(
     db: Session = Depends(get_db),
 ):
     rental = _get_rental_or_404(db, rental_id)
-    item = _get_owned_item_or_404(db, rental.item_id, current_user.id)
+
+    item = _get_owned_item_or_404(
+        db,
+        rental.item_id,
+        current_user.id,
+        current_user=current_user,
+    )
+
+    _assert_can_manage_as_owner(
+        item=item,
+        current_user=current_user,
+    )
 
     if rental.status != "pending":
         raise HTTPException(status_code=400, detail="Only pending rental can be rejected")
@@ -263,6 +416,119 @@ def reject_rental(
     db.add(rental)
     db.commit()
     db.refresh(rental)
+
+    return _to_rental_read(db, rental)
+
+
+@router.post("/{rental_id}/start", response_model=RentalRead)
+def start_rental(
+    rental_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rental = _get_rental_or_404(db, rental_id)
+
+    item = _get_owned_item_or_404(
+        db,
+        rental.item_id,
+        current_user.id,
+        current_user=current_user,
+    )
+
+    _assert_can_manage_as_owner(
+        item=item,
+        current_user=current_user,
+    )
+
+    if rental.status != "approved":
+        raise HTTPException(status_code=400, detail="Only approved rental can be started")
+
+    rental.status = "active"
+    rental.updated_at = datetime.now(timezone.utc)
+
+    _create_notification(
+        db,
+        rental.renter_id,
+        "rental_started",
+        {
+            "rental_id": str(rental.id),
+            "item_id": str(item.id),
+            "item_title": item.title,
+            "status": rental.status,
+        },
+    )
+
+    db.add(rental)
+
+    add_rental_started_event_to_outbox(
+        db,
+        rental=rental,
+    )
+
+    db.commit()
+    db.refresh(rental)
+
+    return _to_rental_read(db, rental)
+
+
+@router.post("/{rental_id}/complete", response_model=RentalRead)
+def complete_rental(
+    rental_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rental = _get_rental_or_404(db, rental_id)
+    item = _get_item_or_404(db, rental.item_id)
+
+    _assert_can_complete_rental(
+        rental=rental,
+        item=item,
+        current_user=current_user,
+    )
+
+    if rental.status != "active":
+        raise HTTPException(status_code=400, detail="Only active rental can be completed")
+
+    rental.status = "completed"
+    rental.updated_at = datetime.now(timezone.utc)
+
+    _create_notification(
+        db,
+        item.owner_id,
+        "rental_completed",
+        {
+            "rental_id": str(rental.id),
+            "item_id": str(item.id),
+            "item_title": item.title,
+            "status": rental.status,
+            "completed_by_user_id": str(current_user.id),
+        },
+    )
+
+    if rental.renter_id != item.owner_id:
+        _create_notification(
+            db,
+            rental.renter_id,
+            "rental_completed",
+            {
+                "rental_id": str(rental.id),
+                "item_id": str(item.id),
+                "item_title": item.title,
+                "status": rental.status,
+                "completed_by_user_id": str(current_user.id),
+            },
+        )
+
+    db.add(rental)
+
+    add_rental_completed_event_to_outbox(
+        db,
+        rental=rental,
+    )
+
+    db.commit()
+    db.refresh(rental)
+
     return _to_rental_read(db, rental)
 
 
@@ -274,13 +540,16 @@ def cancel_rental(
 ):
     rental = _get_rental_or_404(db, rental_id)
 
-    if rental.renter_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Only renter can cancel rental")
+    _assert_can_manage_as_renter(
+        rental=rental,
+        current_user=current_user,
+    )
 
-    if rental.status != "pending":
-        raise HTTPException(status_code=400, detail="Only pending rental can be cancelled")
+    if rental.status not in {"pending", "approved"}:
+        raise HTTPException(status_code=400, detail="Only pending or approved rental can be cancelled")
 
     item = db.query(Item).filter(Item.id == rental.item_id).first()
+
     rental.status = "cancelled"
     rental.updated_at = datetime.now(timezone.utc)
 
@@ -298,6 +567,13 @@ def cancel_rental(
         )
 
     db.add(rental)
+
+    add_rental_cancelled_event_to_outbox(
+        db,
+        rental=rental,
+    )
+
     db.commit()
     db.refresh(rental)
+
     return _to_rental_read(db, rental)
