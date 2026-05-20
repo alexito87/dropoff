@@ -13,3 +13,9 @@ class NotificationRead(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class NotificationCreate(BaseModel):
+    user_id: UUID
+    type: str = Field(min_length=1, max_length=100)
+    payload: dict = Field(default_factory=dict)
