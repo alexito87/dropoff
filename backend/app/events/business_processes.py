@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.events.delivery_events import add_delivery_created_event_to_outbox
 from app.events.order_events import (
+    add_order_activated_event_to_outbox,
     add_order_paid_event_to_outbox,
     add_order_payment_expired_event_to_outbox,
     add_order_payment_failed_event_to_outbox,
@@ -655,13 +656,18 @@ def apply_delivery_event_to_order(
                 order.updated_at = _now()
                 db.add(order)
 
+                add_order_activated_event_to_outbox(
+                    db,
+                    order=order,
+                )
+
                 return {
                     "order_updated": True,
                     "reason": "all_deliveries_delivered_order_activated",
                     "order_id": str(order.id),
                     "order_item_id": str(order_item.id) if order_item else data.get("order_item_id"),
                     "delivery_id": str(delivery.id) if delivery else data.get("delivery_id"),
-                    "published_event": None,
+                    "published_event": "order.activated",
                 }
 
             return {
