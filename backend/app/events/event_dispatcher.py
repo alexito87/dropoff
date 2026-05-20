@@ -40,6 +40,7 @@ from app.events.handlers.moderation_handlers import (
 )
 from app.events.handlers.notifications_handlers import handle_notification_created
 from app.events.handlers.orders_handlers import (
+    handle_order_activated,
     handle_order_completed,
     handle_order_created,
     handle_order_paid,
@@ -85,6 +86,7 @@ EVENT_HANDLERS: dict[str, EventHandler] = {
 
     "order.created": handle_order_created,
     "order.paid": handle_order_paid,
+    "order.activated": handle_order_activated,
     "order.payment_failed": handle_order_payment_failed,
     "order.payment_expired": handle_order_payment_expired,
     "order.completed": handle_order_completed,
