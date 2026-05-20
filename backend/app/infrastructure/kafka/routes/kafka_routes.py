@@ -13,6 +13,11 @@ from app.events.outbox_monitoring import (
     get_recent_outbox_events,
 )
 from app.events.outbox_publisher import publish_pending_outbox_events
+from app.events.projection_monitoring import (
+    get_available_projection_tables,
+    get_projection_summary,
+    get_recent_projection_events,
+)
 from app.events.topics import ALL_TOPICS
 from app.modules.users.models.user import User
 
@@ -106,6 +111,37 @@ def read_recent_consumed_events(
     }
 
 
+@router.get("/projections/summary")
+def read_projection_summary(
+    admin_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    return {
+        "service": "kafka-projections",
+        "summary": get_projection_summary(db),
+        "available_tables": get_available_projection_tables(),
+    }
+
+
+@router.get("/projections/events")
+def read_recent_projection_events(
+    limit: int = Query(default=20, ge=1, le=100),
+    table_name: str | None = Query(default=None),
+    source_event_type: str | None = Query(default=None),
+    admin_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    return {
+        "service": "kafka-projections",
+        "result": get_recent_projection_events(
+            db,
+            table_name=table_name,
+            source_event_type=source_event_type,
+            limit=limit,
+        ),
+    }
+
+
 @router.post("/publish-outbox")
 async def publish_outbox_events(
     limit: int = Query(default=10, ge=1, le=100),
@@ -116,6 +152,5 @@ async def publish_outbox_events(
 
     return {
         "service": "outbox",
-        "status": "processed",
         "result": publish_result,
     }
