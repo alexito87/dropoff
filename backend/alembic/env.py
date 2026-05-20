@@ -23,6 +23,20 @@ from app.modules.payments.models.payment import (
 from app.modules.deliveries.models.delivery import Delivery
 from app.modules.auth.models.email_verification_token import EmailVerificationToken
 from app.models.audit_log_event import AuditLogEvent
+from app.models.outbox_event import OutboxEvent
+from app.models.consumed_kafka_event import ConsumedKafkaEvent
+from app.models.event_projection import (
+    AuditDomainEventProjection,
+    CatalogItemProjection,
+    DeliveriesOrderProjection,
+    ModerationItemProjection,
+    NotificationsUserProjection,
+    OrdersCartProjection,
+    OrdersDeliveryProjection,
+    OrdersItemProjection,
+    OrdersPaymentProjection,
+    PaymentsOrderProjection,
+)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)

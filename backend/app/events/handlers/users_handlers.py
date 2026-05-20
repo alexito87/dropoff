@@ -9,6 +9,31 @@ from app.events.handlers.base import (
     require_data_fields,
     require_event_fields,
 )
+from app.events.projection_utils import apply_values, get_event_data, get_or_create_projection, source_fields
+from app.models.event_projection import NotificationsUserProjection
+
+
+def _upsert_notifications_user_projection(db: Session, event: dict[str, Any]) -> None:
+    data = get_event_data(event)
+    user_id = str(data["user_id"])
+
+    projection = get_or_create_projection(
+        db,
+        NotificationsUserProjection,
+        lookup_field="user_id",
+        lookup_value=user_id,
+    )
+
+    apply_values(
+        projection,
+        {
+            "email": data.get("email"),
+            "full_name": data.get("full_name"),
+            "email_verified": data.get("email_verified"),
+            "is_superuser": data.get("is_superuser"),
+            **source_fields(event),
+        },
+    )
 
 
 def handle_user_created(db: Session, event: dict[str, Any]) -> EventHandlingResult:
@@ -21,9 +46,11 @@ def handle_user_created(db: Session, event: dict[str, Any]) -> EventHandlingResu
         event=event,
     )
 
+    _upsert_notifications_user_projection(db, event)
+
     return processed(
-        "User created event accepted for future target-context projection",
-        target_contexts=["notifications", "orders", "audit"],
+        "User created event projected to notifications user projection",
+        target_contexts=["notifications"],
     )
 
 
@@ -37,7 +64,9 @@ def handle_user_email_verified(db: Session, event: dict[str, Any]) -> EventHandl
         event=event,
     )
 
+    _upsert_notifications_user_projection(db, event)
+
     return processed(
-        "User email verified event accepted for future target-context projection",
-        target_contexts=["notifications", "audit"],
+        "User email verified event projected to notifications user projection",
+        target_contexts=["notifications"],
     )
