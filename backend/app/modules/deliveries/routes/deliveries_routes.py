@@ -29,6 +29,10 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _is_admin(user: User) -> bool:
+    return bool(getattr(user, "is_superuser", False))
+
+
 def _create_notification(db: Session, user_id: UUID, notification_type: str, payload: dict) -> None:
     db.add(
         Notification(
@@ -41,32 +45,42 @@ def _create_notification(db: Session, user_id: UUID, notification_type: str, pay
 
 def _get_order_item_or_404(db: Session, order_item_id: UUID) -> OrderItem:
     order_item = db.query(OrderItem).filter(OrderItem.id == order_item_id).first()
+
     if not order_item:
         raise HTTPException(status_code=404, detail="Order item not found")
+
     return order_item
 
 
 def _get_order_or_404(db: Session, order_id: UUID) -> Order:
     order = db.query(Order).filter(Order.id == order_id).first()
+
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+
     return order
 
 
 def _get_delivery_or_404(db: Session, delivery_id: UUID) -> Delivery:
     delivery = db.query(Delivery).filter(Delivery.id == delivery_id).first()
+
     if not delivery:
         raise HTTPException(status_code=404, detail="Delivery not found")
+
     return delivery
 
 
 def _ensure_delivery_access(delivery: Delivery, current_user: User) -> None:
-    if (
-        delivery.renter_id != current_user.id
-        and delivery.owner_id != current_user.id
-        and not current_user.is_superuser
-    ):
-        raise HTTPException(status_code=403, detail="Access denied")
+    if _is_admin(current_user):
+        return
+
+    if delivery.renter_id == current_user.id:
+        return
+
+    if delivery.owner_id == current_user.id:
+        return
+
+    raise HTTPException(status_code=403, detail="Access denied")
 
 
 def _sync_order_status_after_item_change(db: Session, order: Order) -> None:
@@ -87,6 +101,24 @@ def _sync_order_status_after_item_change(db: Session, order: Order) -> None:
     db.add(order)
 
 
+@router.get("/admin", response_model=list[DeliveryRead])
+def read_all_deliveries_as_admin(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only admin can read all deliveries")
+
+    deliveries = (
+        db.query(Delivery)
+        .order_by(Delivery.updated_at.desc())
+        .limit(200)
+        .all()
+    )
+
+    return deliveries
+
+
 @router.post("", response_model=DeliveryRead, status_code=status.HTTP_201_CREATED)
 def start_delivery(
     payload: DeliveryCreate,
@@ -103,7 +135,7 @@ def start_delivery(
             detail="Delivery can be started only for paid order item",
         )
 
-    if order_item.owner_id != current_user.id and not current_user.is_superuser:
+    if order_item.owner_id != current_user.id and not _is_admin(current_user):
         raise HTTPException(
             status_code=403,
             detail="Only item owner or admin can start delivery",
@@ -114,14 +146,17 @@ def start_delivery(
         .filter(Delivery.order_item_id == order_item.id)
         .first()
     )
+
     if existing_delivery:
         raise HTTPException(status_code=400, detail="Delivery already exists for this order item")
 
     item = db.query(Item).filter(Item.id == order_item.item_id).first()
+
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
     now = _now()
+
     delivery = Delivery(
         order_id=order.id,
         order_item_id=order_item.id,
@@ -184,6 +219,7 @@ def start_delivery(
     db.refresh(delivery)
 
     response.headers["Location"] = f"/api/v1/deliveries/{delivery.id}"
+
     return delivery
 
 
@@ -194,7 +230,9 @@ def delivery_details(
     db: Session = Depends(get_db),
 ):
     delivery = _get_delivery_or_404(db, delivery_id)
+
     _ensure_delivery_access(delivery, current_user)
+
     return delivery
 
 
@@ -206,9 +244,10 @@ def complete_delivery(
     db: Session = Depends(get_db),
 ):
     delivery = _get_delivery_or_404(db, delivery_id)
+
     _ensure_delivery_access(delivery, current_user)
 
-    if delivery.renter_id != current_user.id and not current_user.is_superuser:
+    if delivery.renter_id != current_user.id and not _is_admin(current_user):
         raise HTTPException(
             status_code=403,
             detail="Only renter or admin can confirm delivery completion",
@@ -271,6 +310,7 @@ def complete_delivery(
 
     db.commit()
     db.refresh(delivery)
+
     return delivery
 
 
@@ -282,9 +322,10 @@ def request_delivery_return(
     db: Session = Depends(get_db),
 ):
     delivery = _get_delivery_or_404(db, delivery_id)
+
     _ensure_delivery_access(delivery, current_user)
 
-    if delivery.renter_id != current_user.id and not current_user.is_superuser:
+    if delivery.renter_id != current_user.id and not _is_admin(current_user):
         raise HTTPException(
             status_code=403,
             detail="Only renter or admin can request return",
@@ -350,4 +391,5 @@ def request_delivery_return(
 
     db.commit()
     db.refresh(delivery)
+
     return delivery

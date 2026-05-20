@@ -28,6 +28,10 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _is_admin(user: User) -> bool:
+    return bool(getattr(user, "is_superuser", False))
+
+
 def _serialize_item_image(image: ItemImage) -> ItemImageRead:
     return ItemImageRead(
         id=image.id,
@@ -64,25 +68,35 @@ def _serialize_item(item: Item) -> ItemRead:
     )
 
 
-def _get_owned_item(db: Session, item_id: UUID, owner_id: UUID) -> Item:
-    item = (
+def _get_item_for_user_or_admin(db: Session, item_id: UUID, current_user: User) -> Item:
+    query = (
         db.query(Item)
         .options(selectinload(Item.images))
-        .filter(Item.id == item_id, Item.owner_id == owner_id)
-        .first()
+        .filter(Item.id == item_id)
     )
+
+    if not _is_admin(current_user):
+        query = query.filter(Item.owner_id == current_user.id)
+
+    item = query.first()
+
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
+
     return item
 
 
 def _ensure_category_exists(db: Session, category_id: UUID) -> None:
     category_exists = db.query(Category.id).filter(Category.id == category_id).first()
+
     if not category_exists:
         raise HTTPException(status_code=400, detail="Category does not exist")
 
 
-def _ensure_item_editable(item: Item):
+def _ensure_item_editable(item: Item, current_user: User):
+    if _is_admin(current_user):
+        return
+
     if item.status not in {"draft", "rejected"}:
         raise HTTPException(
             status_code=400,
@@ -90,7 +104,10 @@ def _ensure_item_editable(item: Item):
         )
 
 
-def _ensure_image_replace_allowed(item: Item):
+def _ensure_image_replace_allowed(item: Item, current_user: User):
+    if _is_admin(current_user):
+        return
+
     if item.status not in {"draft", "rejected", "published"}:
         raise HTTPException(
             status_code=400,
@@ -100,15 +117,18 @@ def _ensure_image_replace_allowed(item: Item):
 
 def _validate_image_upload(file: UploadFile, file_bytes: bytes) -> tuple[str, str]:
     mime_type = (file.content_type or "").lower()
+
     if mime_type not in settings.allowed_item_image_mime_types:
         raise HTTPException(status_code=400, detail="Unsupported image type. Allowed: JPEG, PNG, WebP")
 
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty or corrupted file")
+
     if len(file_bytes) > settings.MAX_ITEM_IMAGE_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="File is too large. Maximum size is 5 MB")
 
     ext = Path(file.filename or "image").suffix.lower().replace(".", "")
+
     if ext not in {"jpg", "jpeg", "png", "webp"}:
         raise HTTPException(status_code=400, detail="Unsupported file extension")
 
@@ -116,7 +136,10 @@ def _validate_image_upload(file: UploadFile, file_bytes: bytes) -> tuple[str, st
 
 
 @router.get("/my", response_model=list[ItemRead])
-def read_my_items(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def read_my_items(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     items = (
         db.query(Item)
         .options(selectinload(Item.images))
@@ -124,11 +147,35 @@ def read_my_items(current_user: User = Depends(get_current_user), db: Session = 
         .order_by(Item.created_at.desc())
         .all()
     )
+
+    return [_serialize_item(item) for item in items]
+
+
+@router.get("/admin", response_model=list[ItemRead])
+def read_all_items_as_admin(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only admin can read all items")
+
+    items = (
+        db.query(Item)
+        .options(selectinload(Item.images))
+        .order_by(Item.updated_at.desc())
+        .limit(200)
+        .all()
+    )
+
     return [_serialize_item(item) for item in items]
 
 
 @router.post("", response_model=ItemRead, status_code=status.HTTP_201_CREATED)
-def create_item(payload: ItemCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def create_item(
+    payload: ItemCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     _ensure_category_exists(db, payload.category_id)
 
     item = Item(owner_id=current_user.id, status="draft", **payload.model_dump())
@@ -143,19 +190,32 @@ def create_item(payload: ItemCreate, current_user: User = Depends(get_current_us
 
     db.commit()
     db.refresh(item)
+
     return _serialize_item(item)
 
 
 @router.get("/{item_id}", response_model=ItemRead)
-def read_item(item_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return _serialize_item(_get_owned_item(db, item_id, current_user.id))
+def read_item(
+    item_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
+
+    return _serialize_item(item)
 
 
 @router.patch("/{item_id}", response_model=ItemRead)
-def update_item(item_id: UUID, payload: ItemUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    item = _get_owned_item(db, item_id, current_user.id)
+def update_item(
+    item_id: UUID,
+    payload: ItemUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
     old_status = item.status
-    _ensure_item_editable(item)
+
+    _ensure_item_editable(item, current_user)
     _ensure_category_exists(db, payload.category_id)
 
     for field, value in payload.model_dump().items():
@@ -174,16 +234,23 @@ def update_item(item_id: UUID, payload: ItemUpdate, current_user: User = Depends
     db.commit()
     invalidate_public_catalog_if_published(item.id, old_status)
     db.refresh(item)
+
     return _serialize_item(item)
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_item(item_id: UUID, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    item = _get_owned_item(db, item_id, current_user.id)
+def delete_item(
+    item_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
     old_status = item.status
-    _ensure_item_editable(item)
+
+    _ensure_item_editable(item, current_user)
 
     storage = SupabaseStorageService()
+
     for image in item.images:
         try:
             storage.remove_file(image.storage_path)
@@ -200,6 +267,7 @@ def delete_item(item_id: UUID, current_user: User = Depends(get_current_user), d
     db.delete(item)
     db.commit()
     invalidate_public_catalog_if_published(item.id, old_status)
+
     return None
 
 
@@ -209,9 +277,9 @@ def submit_item_for_moderation(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = _get_owned_item(db, item_id, current_user.id)
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
 
-    if item.status not in {"draft", "rejected"}:
+    if not _is_admin(current_user) and item.status not in {"draft", "rejected"}:
         raise HTTPException(status_code=400, detail="Only draft or rejected item can be submitted")
 
     if not item.images:
@@ -235,6 +303,7 @@ def submit_item_for_moderation(
 
     db.commit()
     db.refresh(item)
+
     return _serialize_item(item)
 
 
@@ -245,11 +314,13 @@ async def upload_item_image(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = _get_owned_item(db, item_id, current_user.id)
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
     current_status = item.status
-    _ensure_item_editable(item)
+
+    _ensure_item_editable(item, current_user)
 
     existing_count = db.query(func.count(ItemImage.id)).filter(ItemImage.item_id == item.id).scalar() or 0
+
     if existing_count >= settings.MAX_ITEM_IMAGE_COUNT:
         raise HTTPException(status_code=400, detail=f"Maximum {settings.MAX_ITEM_IMAGE_COUNT} images per item")
 
@@ -257,8 +328,14 @@ async def upload_item_image(
     mime_type, ext = _validate_image_upload(file, file_bytes)
 
     storage = SupabaseStorageService()
+
     try:
-        uploaded = storage.upload_bytes(str(item.id), file_bytes=file_bytes, extension=ext, mime_type=mime_type)
+        uploaded = storage.upload_bytes(
+            str(item.id),
+            file_bytes=file_bytes,
+            extension=ext,
+            mime_type=mime_type,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to upload image to storage: {exc}") from exc
 
@@ -271,10 +348,12 @@ async def upload_item_image(
         sort_order=existing_count,
         version=1,
     )
+
     db.add(image)
     db.commit()
     invalidate_public_catalog_if_published(item.id, current_status)
     db.refresh(image)
+
     return _serialize_item_image(image)
 
 
@@ -286,11 +365,13 @@ async def replace_item_image(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = _get_owned_item(db, item_id, current_user.id)
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
     current_status = item.status
-    _ensure_image_replace_allowed(item)
+
+    _ensure_image_replace_allowed(item, current_user)
 
     image = db.query(ItemImage).filter(ItemImage.id == image_id, ItemImage.item_id == item.id).first()
+
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
@@ -302,8 +383,14 @@ async def replace_item_image(
     mime_type, ext = _validate_image_upload(file, file_bytes)
 
     storage = SupabaseStorageService()
+
     try:
-        uploaded = storage.upload_bytes(str(item.id), file_bytes=file_bytes, extension=ext, mime_type=mime_type)
+        uploaded = storage.upload_bytes(
+            str(item.id),
+            file_bytes=file_bytes,
+            extension=ext,
+            mime_type=mime_type,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Failed to upload replacement image to storage: {exc}") from exc
 
@@ -349,15 +436,18 @@ def delete_item_image(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    item = _get_owned_item(db, item_id, current_user.id)
+    item = _get_item_for_user_or_admin(db, item_id, current_user)
     current_status = item.status
-    _ensure_item_editable(item)
+
+    _ensure_item_editable(item, current_user)
 
     image = db.query(ItemImage).filter(ItemImage.id == image_id, ItemImage.item_id == item.id).first()
+
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
 
     storage = SupabaseStorageService()
+
     try:
         storage.remove_file(image.storage_path)
     except Exception as exc:
@@ -366,4 +456,5 @@ def delete_item_image(
     db.delete(image)
     db.commit()
     invalidate_public_catalog_if_published(item.id, current_status)
+
     return None
