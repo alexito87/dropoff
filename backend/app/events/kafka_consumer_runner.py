@@ -9,6 +9,7 @@ from aiokafka import AIOKafkaConsumer
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.events.consumer_registry import KafkaConsumerConfig
+from app.events.dlq import record_dead_letter_event
 from app.events.event_dispatcher import dispatch_event
 from app.events.handlers.base import ignored
 from app.events.idempotency import is_event_already_processed, mark_event_processed
@@ -138,6 +139,31 @@ def _build_decode_error_payload(
     }
 
 
+def _record_failed_event_to_dlq(
+    *,
+    db,
+    consumer_name: str,
+    topic: str,
+    partition: int,
+    offset: int,
+    event_key: str | None,
+    payload: dict[str, Any],
+    error_type: str,
+    error_message: str,
+) -> None:
+    record_dead_letter_event(
+        db,
+        consumer_name=consumer_name,
+        topic=topic,
+        partition=partition,
+        offset=offset,
+        event_key=event_key,
+        payload=payload,
+        error_type=error_type,
+        error_message=error_message,
+    )
+
+
 def _record_event_after_business_handling(
     *,
     db,
@@ -190,6 +216,19 @@ def _record_event_after_business_handling(
     error_message = None
     if status in {"failed", "ignored"}:
         error_message = handling_result.message
+
+    if status == "failed":
+        _record_failed_event_to_dlq(
+            db=db,
+            consumer_name=consumer_name,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            event_key=event_key,
+            payload=payload,
+            error_type="business_handling_failed",
+            error_message=error_message or "Business handler failed",
+        )
 
     mark_event_processed(
         db,
@@ -309,6 +348,18 @@ async def run_kafka_consumer_loop(
                                     error=decode_error,
                                 )
 
+                                _record_failed_event_to_dlq(
+                                    db=db,
+                                    consumer_name=consumer_config.name,
+                                    topic=message.topic,
+                                    partition=message.partition,
+                                    offset=message.offset,
+                                    event_key=event_key,
+                                    payload=payload,
+                                    error_type="message_decode_failed",
+                                    error_message=str(decode_error),
+                                )
+
                                 record_consumed_kafka_event(
                                     db,
                                     consumer_name=consumer_config.name,
@@ -366,6 +417,18 @@ async def run_kafka_consumer_loop(
                                         offset=message.offset,
                                         error=exc,
                                     )
+                                )
+
+                                _record_failed_event_to_dlq(
+                                    db=db,
+                                    consumer_name=consumer_config.name,
+                                    topic=message.topic,
+                                    partition=message.partition,
+                                    offset=message.offset,
+                                    event_key=event_key,
+                                    payload=payload_for_failed_record,
+                                    error_type="consumer_processing_failed",
+                                    error_message=str(exc),
                                 )
 
                                 record_consumed_kafka_event(

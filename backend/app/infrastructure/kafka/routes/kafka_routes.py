@@ -7,6 +7,10 @@ from app.events.consumer_monitoring import (
     get_recent_consumed_events,
 )
 from app.events.consumer_registry import KAFKA_CONSUMERS
+from app.events.dlq_monitoring import (
+    get_dead_letter_summary,
+    get_recent_dead_letter_events,
+)
 from app.events.kafka_health import check_kafka_connection
 from app.events.outbox_monitoring import (
     get_outbox_summary,
@@ -138,6 +142,40 @@ def read_recent_projection_events(
             table_name=table_name,
             source_event_type=source_event_type,
             limit=limit,
+        ),
+    }
+
+
+@router.get("/dlq/summary")
+def read_dead_letter_summary(
+    admin_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    return {
+        "service": "kafka-dlq",
+        "summary": get_dead_letter_summary(db),
+    }
+
+
+@router.get("/dlq/events")
+def read_recent_dead_letter_events(
+    limit: int = Query(default=20, ge=1, le=100),
+    topic: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    error_type: str | None = Query(default=None),
+    event_type: str | None = Query(default=None),
+    admin_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    return {
+        "service": "kafka-dlq",
+        "events": get_recent_dead_letter_events(
+            db,
+            limit=limit,
+            topic=topic,
+            status=status,
+            error_type=error_type,
+            event_type=event_type,
         ),
     }
 
