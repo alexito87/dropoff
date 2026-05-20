@@ -25,6 +25,7 @@ from app.modules.auth.models.email_verification_token import EmailVerificationTo
 from app.models.audit_log_event import AuditLogEvent
 from app.models.outbox_event import OutboxEvent
 from app.models.consumed_kafka_event import ConsumedKafkaEvent
+from app.models.processed_domain_event import ProcessedDomainEvent
 from app.models.event_projection import (
     AuditDomainEventProjection,
     CatalogItemProjection,

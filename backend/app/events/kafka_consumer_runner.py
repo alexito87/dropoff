@@ -10,6 +10,8 @@ from app.core.config import settings
 from app.core.db import SessionLocal
 from app.events.consumer_registry import KafkaConsumerConfig
 from app.events.event_dispatcher import dispatch_event
+from app.events.handlers.base import ignored
+from app.events.idempotency import is_event_already_processed, mark_event_processed
 from app.events.kafka_consumer_handlers import record_consumed_kafka_event
 
 logger = logging.getLogger(__name__)
@@ -146,6 +148,33 @@ def _record_event_after_business_handling(
     event_key: str | None,
     payload: dict[str, Any],
 ) -> str:
+    if is_event_already_processed(
+        db,
+        consumer_name=consumer_name,
+        event=payload,
+    ):
+        handling_result = ignored(
+            "Duplicate event skipped by idempotency check",
+            consumer_name=consumer_name,
+            topic=topic,
+            event_id=payload.get("event_id"),
+            event_type=payload.get("event_type"),
+        )
+
+        record_consumed_kafka_event(
+            db,
+            consumer_name=consumer_name,
+            topic=topic,
+            partition=partition,
+            offset=offset,
+            event_key=event_key,
+            payload=payload,
+            status="ignored",
+            error_message=handling_result.message,
+        )
+
+        return "ignored"
+
     handling_result = dispatch_event(
         db,
         consumer_name=consumer_name,
@@ -161,6 +190,14 @@ def _record_event_after_business_handling(
     error_message = None
     if status in {"failed", "ignored"}:
         error_message = handling_result.message
+
+    mark_event_processed(
+        db,
+        consumer_name=consumer_name,
+        topic=topic,
+        event=payload,
+        handling_result=handling_result,
+    )
 
     record_consumed_kafka_event(
         db,
