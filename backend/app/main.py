@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -9,6 +10,17 @@ from app.events.outbox_publisher import run_outbox_publisher_loop
 from app.events.producer import kafka_event_producer
 from app.infrastructure.registry import register_infrastructure
 from app.modules.registry import register_modules
+
+
+async def _stop_task(task: asyncio.Task | None) -> None:
+    if not task:
+        return
+
+    if not task.done():
+        task.cancel()
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
 
 
 @asynccontextmanager
@@ -26,10 +38,10 @@ async def lifespan(app: FastAPI):
     finally:
         stop_outbox_publisher.set()
 
-        if outbox_publisher_task:
-            await outbox_publisher_task
+        await _stop_task(outbox_publisher_task)
 
-        await kafka_event_producer.stop()
+        with contextlib.suppress(Exception):
+            await kafka_event_producer.stop()
 
 
 app = FastAPI(

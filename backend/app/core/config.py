@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     kafka_client_id: str = "dropoff-backend"
     kafka_enabled: bool = True
 
+    kafka_consumers_enabled: bool = True
+    kafka_consumer_group_prefix: str = "dropoff-consumer"
+    kafka_consumer_auto_offset_reset: str = "earliest"
+    kafka_consumer_poll_timeout_ms: int = 1000
+
     outbox_publisher_enabled: bool = True
     outbox_publisher_interval_seconds: float = 5.0
     outbox_publisher_batch_size: int = 25
@@ -135,6 +140,22 @@ class Settings(BaseSettings):
     @property
     def KAFKA_ENABLED(self) -> bool:
         return self.kafka_enabled
+
+    @property
+    def KAFKA_CONSUMERS_ENABLED(self) -> bool:
+        return self.kafka_consumers_enabled
+
+    @property
+    def KAFKA_CONSUMER_GROUP_PREFIX(self) -> str:
+        return self.kafka_consumer_group_prefix
+
+    @property
+    def KAFKA_CONSUMER_AUTO_OFFSET_RESET(self) -> str:
+        return self.kafka_consumer_auto_offset_reset
+
+    @property
+    def KAFKA_CONSUMER_POLL_TIMEOUT_MS(self) -> int:
+        return self.kafka_consumer_poll_timeout_ms
 
     @property
     def OUTBOX_PUBLISHER_ENABLED(self) -> bool:
