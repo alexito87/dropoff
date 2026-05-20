@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.events.business_processes import apply_payment_event_to_order
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -9,7 +10,12 @@ from app.events.handlers.base import (
     require_data_fields,
     require_event_fields,
 )
-from app.events.projection_utils import apply_values, get_event_data, get_or_create_projection, source_fields
+from app.events.projection_utils import (
+    apply_values,
+    get_event_data,
+    get_or_create_projection,
+    source_fields,
+)
 from app.models.event_projection import OrdersPaymentProjection
 
 
@@ -49,9 +55,12 @@ def handle_payment_created(db: Session, event: dict[str, Any]) -> EventHandlingR
 
     _upsert_orders_payment_projection(db, event)
 
+    business_result = apply_payment_event_to_order(db, event)
+
     return processed(
         "Payment created event projected to orders payment projection",
         target_contexts=["orders"],
+        business_result=business_result,
     )
 
 
@@ -63,9 +72,12 @@ def handle_payment_checkout_session_created(db: Session, event: dict[str, Any]) 
 
     _upsert_orders_payment_projection(db, event)
 
+    business_result = apply_payment_event_to_order(db, event)
+
     return processed(
         "Payment checkout session created event projected to orders payment projection",
         target_contexts=["orders"],
+        business_result=business_result,
     )
 
 
@@ -77,9 +89,12 @@ def handle_payment_succeeded(db: Session, event: dict[str, Any]) -> EventHandlin
 
     _upsert_orders_payment_projection(db, event)
 
+    business_result = apply_payment_event_to_order(db, event)
+
     return processed(
-        "Payment succeeded event projected to orders payment projection",
+        "Payment succeeded event projected and applied to order",
         target_contexts=["orders"],
+        business_result=business_result,
     )
 
 
@@ -91,9 +106,12 @@ def handle_payment_failed(db: Session, event: dict[str, Any]) -> EventHandlingRe
 
     _upsert_orders_payment_projection(db, event)
 
+    business_result = apply_payment_event_to_order(db, event)
+
     return processed(
-        "Payment failed event projected to orders payment projection",
+        "Payment failed event projected and applied to order",
         target_contexts=["orders"],
+        business_result=business_result,
     )
 
 
@@ -105,7 +123,10 @@ def handle_payment_expired(db: Session, event: dict[str, Any]) -> EventHandlingR
 
     _upsert_orders_payment_projection(db, event)
 
+    business_result = apply_payment_event_to_order(db, event)
+
     return processed(
-        "Payment expired event projected to orders payment projection",
+        "Payment expired event projected and applied to order",
         target_contexts=["orders"],
+        business_result=business_result,
     )

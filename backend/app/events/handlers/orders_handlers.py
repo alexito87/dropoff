@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.events.business_processes import ensure_payment_for_order_created_event
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -9,7 +10,12 @@ from app.events.handlers.base import (
     require_data_fields,
     require_event_fields,
 )
-from app.events.projection_utils import apply_values, get_event_data, get_or_create_projection, source_fields
+from app.events.projection_utils import (
+    apply_values,
+    get_event_data,
+    get_or_create_projection,
+    source_fields,
+)
 from app.models.event_projection import DeliveriesOrderProjection, PaymentsOrderProjection
 
 
@@ -73,9 +79,12 @@ def handle_order_created(db: Session, event: dict[str, Any]) -> EventHandlingRes
 
     _upsert_order_projections(db, event)
 
+    payment_result = ensure_payment_for_order_created_event(db, event)
+
     return processed(
-        "Order created event projected to payments and deliveries order projections",
+        "Order created event projected and payment creation checked",
         target_contexts=["payments", "deliveries"],
+        business_result=payment_result,
     )
 
 
