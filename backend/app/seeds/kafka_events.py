@@ -8,6 +8,7 @@ from typing import Any
 from app.core.db import SessionLocal
 from app.events.outbox import add_event_to_outbox
 from app.events.outbox_publisher import publish_pending_outbox_events
+from app.events.producer import kafka_event_producer
 from app.events.schemas import EventEnvelope
 from app.events.topics import (
     AUDIT_EVENTS_TOPIC,
@@ -139,6 +140,12 @@ def _moderation_payload(topic: str, event_type: str, index: int) -> dict[str, An
         "moderation.item_needs_changes": "needs_changes",
     }
 
+    target_status_by_event = {
+        "moderation.item_approved": "published",
+        "moderation.item_rejected": "rejected",
+        "moderation.item_needs_changes": "needs_changes",
+    }
+
     return {
         **_base_payload(topic, event_type, index),
         "item_id": str(uuid.uuid4()),
@@ -146,7 +153,7 @@ def _moderation_payload(topic: str, event_type: str, index: int) -> dict[str, An
         "category_id": str(uuid.uuid4()),
         "title": f"Moderated seed item {index}",
         "previous_status": "pending_review",
-        "target_status": "published" if event_type == "moderation.item_approved" else "rejected",
+        "target_status": target_status_by_event.get(event_type, "pending_review"),
         "decision": decision_by_event.get(event_type),
         "moderator_user_id": str(uuid.uuid4()),
         "moderation_comment": None if event_type == "moderation.item_approved" else "Seed moderation decision",
@@ -384,39 +391,43 @@ async def main() -> None:
     parser.add_argument("--publish", action="store_true")
     args = parser.parse_args()
 
-    created_by_topic = create_seed_events(per_topic=args.per_topic)
-    total_created = sum(created_by_topic.values())
+    try:
+        created_by_topic = create_seed_events(per_topic=args.per_topic)
+        total_created = sum(created_by_topic.values())
 
-    print("Created outbox events:")
-    for topic, count in created_by_topic.items():
-        print(f"- {topic}: {count}")
+        print("Created outbox events:")
+        for topic, count in created_by_topic.items():
+            print(f"- {topic}: {count}")
 
-    print(f"Total created: {total_created}")
+        print(f"Total created: {total_created}")
 
-    if not args.publish:
-        print("Events were created in outbox only. Background publisher should publish them automatically.")
-        return
+        if not args.publish:
+            print("Events were created in outbox only. Background publisher should publish them automatically.")
+            return
 
-    remaining = total_created
-    total_published = 0
-    total_failed = 0
+        remaining = total_created
+        total_published = 0
+        total_failed = 0
 
-    while remaining > 0:
-        result = await publish_created_events(limit=min(100, remaining))
+        while remaining > 0:
+            result = await publish_created_events(limit=min(100, remaining))
 
-        total_published += result["published"]
-        total_failed += result["failed"]
+            total_published += result["published"]
+            total_failed += result["failed"]
 
-        processed = result["published"] + result["failed"]
+            processed = result["published"] + result["failed"]
 
-        if processed == 0:
-            break
+            if processed == 0:
+                break
 
-        remaining -= processed
+            remaining -= processed
 
-    print("Publish result:")
-    print(f"- published: {total_published}")
-    print(f"- failed: {total_failed}")
+        print("Publish result:")
+        print(f"- published: {total_published}")
+        print(f"- failed: {total_failed}")
+
+    finally:
+        await kafka_event_producer.stop()
 
 
 if __name__ == "__main__":
