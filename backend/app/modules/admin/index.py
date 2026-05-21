@@ -5,6 +5,7 @@ from app.modules.admin.routes.admin_deliveries_routes import router as admin_del
 from app.modules.admin.routes.admin_moderation_routes import router as admin_moderation_routes
 from app.modules.admin.routes.admin_orders_routes import router as admin_orders_routes
 from app.modules.admin.routes.admin_payments_routes import router as admin_payments_routes
+from app.modules.admin.routes.admin_rentals_routes import router as admin_rentals_routes
 from app.modules.admin.routes.admin_routes import router as admin_routes
 
 router = APIRouter()
@@ -43,4 +44,10 @@ router.include_router(
     admin_deliveries_routes,
     prefix="/admin/deliveries",
     tags=["admin-deliveries"],
+)
+
+router.include_router(
+    admin_rentals_routes,
+    prefix="/admin/rentals",
+    tags=["admin-rentals"],
 )
