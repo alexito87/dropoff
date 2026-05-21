@@ -2,7 +2,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.events.business_processes import ensure_payment_for_order_created_event
+from app.events.business_processes import (
+    ensure_deliveries_for_order_paid_event,
+    ensure_payment_for_order_created_event,
+)
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -96,8 +99,25 @@ def handle_order_paid(db: Session, event: dict[str, Any]) -> EventHandlingResult
 
     _upsert_order_projections(db, event)
 
+    deliveries_result = ensure_deliveries_for_order_paid_event(db, event)
+
     return processed(
-        "Order paid event projected to payments and deliveries order projections",
+        "Order paid event projected and deliveries creation checked",
+        target_contexts=["payments", "deliveries"],
+        business_result=deliveries_result,
+    )
+
+
+def handle_order_activated(db: Session, event: dict[str, Any]) -> EventHandlingResult:
+    require_event_fields(event, "event_id", "event_type", "aggregate_type", "aggregate_id")
+    require_data_fields(event, "order_id", "user_id", "status")
+
+    log_event_received(db=db, handler_name="handle_order_activated", event=event)
+
+    _upsert_order_projections(db, event)
+
+    return processed(
+        "Order activated event projected to payments and deliveries order projections",
         target_contexts=["payments", "deliveries"],
     )
 

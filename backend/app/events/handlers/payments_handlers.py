@@ -2,7 +2,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.events.business_processes import apply_payment_event_to_order
+from app.events.business_processes import (
+    apply_payment_event_to_order,
+    ensure_checkout_session_for_payment_created_event,
+)
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -55,12 +58,16 @@ def handle_payment_created(db: Session, event: dict[str, Any]) -> EventHandlingR
 
     _upsert_orders_payment_projection(db, event)
 
-    business_result = apply_payment_event_to_order(db, event)
+    order_result = apply_payment_event_to_order(db, event)
+    checkout_result = ensure_checkout_session_for_payment_created_event(db, event)
 
     return processed(
-        "Payment created event projected to orders payment projection",
-        target_contexts=["orders"],
-        business_result=business_result,
+        "Payment created event projected, applied to order, and checkout session checked",
+        target_contexts=["orders", "payments"],
+        business_result={
+            "order_result": order_result,
+            "checkout_result": checkout_result,
+        },
     )
 
 

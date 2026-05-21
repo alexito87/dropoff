@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.core.admin import is_admin
 from app.core.config import settings
 from app.events.cart_events import add_cart_converted_to_order_event_to_outbox
 from app.events.notification_events import add_notification_created_event_to_outbox
@@ -56,9 +57,6 @@ PAYMENT_TERMINAL_STATUSES = {"paid", "failed", "cancelled", "expired", "refunded
 def _now():
     return datetime.now(timezone.utc)
 
-
-def _is_admin(user: User) -> bool:
-    return bool(getattr(user, "is_superuser", False))
 
 
 def _days_count(start_date, end_date) -> int:
@@ -151,7 +149,7 @@ def _get_order_for_user_or_admin(
 ) -> Order:
     query = db.query(Order).filter(Order.id == order_id)
 
-    if not _is_admin(current_user):
+    if not is_admin(current_user):
         query = query.filter(Order.user_id == current_user.id)
 
     if for_update:
@@ -730,7 +728,7 @@ def read_all_orders_as_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not _is_admin(current_user):
+    if not is_admin(current_user):
         raise HTTPException(status_code=403, detail="Only admin can read all orders")
 
     orders = (

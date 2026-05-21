@@ -14,6 +14,7 @@ from app.events.handlers.base import (
     require_event_fields,
 )
 from app.events.handlers.cart_handlers import (
+    handle_cart_checkout_requested,
     handle_cart_cleared,
     handle_cart_converted_to_order,
     handle_cart_item_added,
@@ -55,9 +56,11 @@ from app.events.handlers.payments_handlers import (
     handle_payment_succeeded,
 )
 from app.events.handlers.rentals_handlers import (
+    handle_rental_approved,
     handle_rental_cancelled,
     handle_rental_completed,
     handle_rental_created,
+    handle_rental_rejected,
     handle_rental_started,
 )
 from app.events.handlers.users_handlers import (
@@ -88,6 +91,7 @@ EVENT_HANDLERS: dict[str, EventHandler] = {
     "cart.item_added": handle_cart_item_added,
     "cart.item_removed": handle_cart_item_removed,
     "cart.cleared": handle_cart_cleared,
+    "cart.checkout_requested": handle_cart_checkout_requested,
     "cart.converted_to_order": handle_cart_converted_to_order,
 
     "order.created": handle_order_created,
@@ -109,6 +113,8 @@ EVENT_HANDLERS: dict[str, EventHandler] = {
     "delivery.cancelled": handle_delivery_cancelled,
 
     "rental.created": handle_rental_created,
+    "rental.approved": handle_rental_approved,
+    "rental.rejected": handle_rental_rejected,
     "rental.started": handle_rental_started,
     "rental.completed": handle_rental_completed,
     "rental.cancelled": handle_rental_cancelled,

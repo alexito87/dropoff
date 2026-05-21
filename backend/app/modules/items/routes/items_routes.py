@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_db
 from app.core.config import settings
+from app.core.admin import is_admin
 from app.events.item_events import (
     add_item_created_event_to_outbox,
     add_item_deleted_event_to_outbox,
@@ -26,11 +27,6 @@ from app.services.supabase_storage_service import SupabaseStorageService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-def _is_admin(user: User) -> bool:
-    return bool(getattr(user, "is_superuser", False))
-
 
 def _serialize_item_image(image: ItemImage) -> ItemImageRead:
     return ItemImageRead(
@@ -75,7 +71,7 @@ def _get_item_for_user_or_admin(db: Session, item_id: UUID, current_user: User) 
         .filter(Item.id == item_id)
     )
 
-    if not _is_admin(current_user):
+    if not is_admin(current_user):
         query = query.filter(Item.owner_id == current_user.id)
 
     item = query.first()
@@ -94,7 +90,7 @@ def _ensure_category_exists(db: Session, category_id: UUID) -> None:
 
 
 def _ensure_item_editable(item: Item, current_user: User):
-    if _is_admin(current_user):
+    if is_admin(current_user):
         return
 
     if item.status not in {"draft", "rejected"}:
@@ -105,7 +101,7 @@ def _ensure_item_editable(item: Item, current_user: User):
 
 
 def _ensure_image_replace_allowed(item: Item, current_user: User):
-    if _is_admin(current_user):
+    if is_admin(current_user):
         return
 
     if item.status not in {"draft", "rejected", "published"}:
@@ -156,7 +152,7 @@ def read_all_items_as_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not _is_admin(current_user):
+    if not is_admin(current_user):
         raise HTTPException(status_code=403, detail="Only admin can read all items")
 
     items = (
@@ -279,7 +275,7 @@ def submit_item_for_moderation(
 ):
     item = _get_item_for_user_or_admin(db, item_id, current_user)
 
-    if not _is_admin(current_user) and item.status not in {"draft", "rejected"}:
+    if not is_admin(current_user) and item.status not in {"draft", "rejected"}:
         raise HTTPException(status_code=400, detail="Only draft or rejected item can be submitted")
 
     if not item.images:

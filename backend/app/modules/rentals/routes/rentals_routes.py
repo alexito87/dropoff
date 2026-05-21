@@ -7,13 +7,14 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.events.rental_events import (
+    add_rental_approved_event_to_outbox,
     add_rental_cancelled_event_to_outbox,
     add_rental_completed_event_to_outbox,
     add_rental_created_event_to_outbox,
+    add_rental_rejected_event_to_outbox,
     add_rental_started_event_to_outbox,
 )
 from app.modules.items.models.item import Item
-from app.modules.notifications.models.notification import Notification
 from app.modules.rentals.models.rental import Rental
 from app.modules.rentals.schemas.rental import (
     RentalCreate,
@@ -56,16 +57,6 @@ def _to_rental_read(db: Session, rental: Rental) -> RentalRead:
         owner_comment=rental.owner_comment,
         created_at=rental.created_at,
         updated_at=rental.updated_at,
-    )
-
-
-def _create_notification(db: Session, user_id, notification_type: str, payload: dict):
-    db.add(
-        Notification(
-            user_id=user_id,
-            type=notification_type,
-            payload=payload,
-        )
     )
 
 
@@ -225,18 +216,6 @@ def create_rental(
     db.add(rental)
     db.flush()
 
-    _create_notification(
-        db,
-        item.owner_id,
-        "rental_created",
-        {
-            "rental_id": str(rental.id),
-            "item_id": str(item.id),
-            "item_title": item.title,
-            "status": "pending",
-        },
-    )
-
     add_rental_created_event_to_outbox(
         db,
         rental=rental,
@@ -353,19 +332,13 @@ def approve_rental(
     rental.status = "approved"
     rental.updated_at = datetime.now(timezone.utc)
 
-    _create_notification(
+    db.add(rental)
+
+    add_rental_approved_event_to_outbox(
         db,
-        rental.renter_id,
-        "rental_approved",
-        {
-            "rental_id": str(rental.id),
-            "item_id": str(item.id),
-            "item_title": item.title,
-            "status": rental.status,
-        },
+        rental=rental,
     )
 
-    db.add(rental)
     db.commit()
     db.refresh(rental)
 
@@ -400,20 +373,13 @@ def reject_rental(
     rental.owner_comment = payload.owner_comment
     rental.updated_at = datetime.now(timezone.utc)
 
-    _create_notification(
+    db.add(rental)
+
+    add_rental_rejected_event_to_outbox(
         db,
-        rental.renter_id,
-        "rental_rejected",
-        {
-            "rental_id": str(rental.id),
-            "item_id": str(item.id),
-            "item_title": item.title,
-            "status": rental.status,
-            "owner_comment": payload.owner_comment,
-        },
+        rental=rental,
     )
 
-    db.add(rental)
     db.commit()
     db.refresh(rental)
 
@@ -445,18 +411,6 @@ def start_rental(
 
     rental.status = "active"
     rental.updated_at = datetime.now(timezone.utc)
-
-    _create_notification(
-        db,
-        rental.renter_id,
-        "rental_started",
-        {
-            "rental_id": str(rental.id),
-            "item_id": str(item.id),
-            "item_title": item.title,
-            "status": rental.status,
-        },
-    )
 
     db.add(rental)
 
@@ -492,33 +446,6 @@ def complete_rental(
     rental.status = "completed"
     rental.updated_at = datetime.now(timezone.utc)
 
-    _create_notification(
-        db,
-        item.owner_id,
-        "rental_completed",
-        {
-            "rental_id": str(rental.id),
-            "item_id": str(item.id),
-            "item_title": item.title,
-            "status": rental.status,
-            "completed_by_user_id": str(current_user.id),
-        },
-    )
-
-    if rental.renter_id != item.owner_id:
-        _create_notification(
-            db,
-            rental.renter_id,
-            "rental_completed",
-            {
-                "rental_id": str(rental.id),
-                "item_id": str(item.id),
-                "item_title": item.title,
-                "status": rental.status,
-                "completed_by_user_id": str(current_user.id),
-            },
-        )
-
     db.add(rental)
 
     add_rental_completed_event_to_outbox(
@@ -548,23 +475,8 @@ def cancel_rental(
     if rental.status not in {"pending", "approved"}:
         raise HTTPException(status_code=400, detail="Only pending or approved rental can be cancelled")
 
-    item = db.query(Item).filter(Item.id == rental.item_id).first()
-
     rental.status = "cancelled"
     rental.updated_at = datetime.now(timezone.utc)
-
-    if item:
-        _create_notification(
-            db,
-            item.owner_id,
-            "rental_cancelled",
-            {
-                "rental_id": str(rental.id),
-                "item_id": str(item.id),
-                "item_title": item.title,
-                "status": rental.status,
-            },
-        )
 
     db.add(rental)
 

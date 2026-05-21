@@ -113,6 +113,35 @@ def add_cart_cleared_event_to_outbox(
     )
 
 
+def add_cart_checkout_requested_event_to_outbox(
+    db: Session,
+    *,
+    cart,
+    user_id,
+    delivery_method: str,
+    payment_method: str,
+) -> None:
+    event = EventEnvelope(
+        event_type="cart.checkout_requested",
+        producer="orders-endpoint",
+        aggregate_type="Cart",
+        aggregate_id=str(cart.id),
+        data={
+            **_cart_payload(cart),
+            "user_id": str(user_id),
+            "delivery_method": delivery_method,
+            "payment_method": payment_method,
+        },
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=CART_EVENTS_TOPIC,
+        event=event,
+        key=str(cart.id),
+    )
+
+
 def add_cart_converted_to_order_event_to_outbox(
     db: Session,
     *,
@@ -122,7 +151,7 @@ def add_cart_converted_to_order_event_to_outbox(
 ) -> None:
     event = EventEnvelope(
         event_type="cart.converted_to_order",
-        producer="orders-endpoint",
+        producer="orders-consumer",
         aggregate_type="Cart",
         aggregate_id=str(cart.id),
         data={

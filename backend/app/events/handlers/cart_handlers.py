@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.events.business_processes import create_order_from_cart_checkout_requested_event
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -9,7 +10,12 @@ from app.events.handlers.base import (
     require_data_fields,
     require_event_fields,
 )
-from app.events.projection_utils import apply_values, get_event_data, get_or_create_projection, source_fields
+from app.events.projection_utils import (
+    apply_values,
+    get_event_data,
+    get_or_create_projection,
+    source_fields,
+)
 from app.models.event_projection import OrdersCartProjection
 
 
@@ -77,6 +83,29 @@ def handle_cart_cleared(db: Session, event: dict[str, Any]) -> EventHandlingResu
     return processed(
         "Cart cleared event projected to orders cart projection",
         target_contexts=["orders"],
+    )
+
+
+def handle_cart_checkout_requested(db: Session, event: dict[str, Any]) -> EventHandlingResult:
+    require_event_fields(event, "event_id", "event_type", "aggregate_type", "aggregate_id")
+    require_data_fields(
+        event,
+        "cart_id",
+        "user_id",
+        "delivery_method",
+        "payment_method",
+    )
+
+    log_event_received(db=db, handler_name="handle_cart_checkout_requested", event=event)
+
+    _upsert_orders_cart_projection(db, event)
+
+    business_result = create_order_from_cart_checkout_requested_event(db, event)
+
+    return processed(
+        "Cart checkout requested event projected and applied to order creation",
+        target_contexts=["orders", "payments"],
+        business_result=business_result,
     )
 
 
