@@ -2,8 +2,10 @@ from fastapi import APIRouter
 
 from app.modules.admin.routes.admin_actions_routes import router as admin_actions_routes
 from app.modules.admin.routes.admin_auth_routes import router as admin_auth_routes
+from app.modules.admin.routes.admin_carts_routes import router as admin_carts_routes
 from app.modules.admin.routes.admin_deliveries_routes import router as admin_deliveries_routes
 from app.modules.admin.routes.admin_moderation_routes import router as admin_moderation_routes
+from app.modules.admin.routes.admin_notifications_routes import router as admin_notifications_routes
 from app.modules.admin.routes.admin_orders_routes import router as admin_orders_routes
 from app.modules.admin.routes.admin_payments_routes import router as admin_payments_routes
 from app.modules.admin.routes.admin_rentals_routes import router as admin_rentals_routes
@@ -57,4 +59,16 @@ router.include_router(
     admin_auth_routes,
     prefix="/admin/auth",
     tags=["admin-auth"],
+)
+
+router.include_router(
+    admin_carts_routes,
+    prefix="/admin/carts",
+    tags=["admin-carts"],
+)
+
+router.include_router(
+    admin_notifications_routes,
+    prefix="/admin/notifications",
+    tags=["admin-notifications"],
 )
