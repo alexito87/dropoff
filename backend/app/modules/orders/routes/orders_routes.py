@@ -26,7 +26,12 @@ from app.modules.orders.models.cart import Cart, CartItem
 from app.models.item import Item
 from app.models.notification import Notification
 from app.modules.orders.models.order import Order, OrderItem
-from app.modules.payments.models.payment import Payment, PaymentTransaction, StripeCheckoutSession, StripePaymentIntent
+from app.modules.payments.models.payment import (
+    Payment,
+    PaymentTransaction,
+    StripeCheckoutSession,
+    StripePaymentIntent,
+)
 from app.models.user import User
 from app.modules.orders.schemas.order import (
     CheckoutSessionRead,
@@ -50,6 +55,10 @@ PAYMENT_TERMINAL_STATUSES = {"paid", "failed", "cancelled", "expired", "refunded
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _is_admin(user: User) -> bool:
+    return bool(getattr(user, "is_superuser", False))
 
 
 def _days_count(start_date, end_date) -> int:
@@ -106,6 +115,7 @@ def _add_transaction(
 def _payment_to_read(payment: Payment | None) -> PaymentRead | None:
     if not payment:
         return None
+
     return PaymentRead(
         id=payment.id,
         status=payment.status,
@@ -130,6 +140,29 @@ def _get_order_payment(db: Session, order_id: UUID) -> Payment | None:
         .order_by(Payment.created_at.desc())
         .first()
     )
+
+
+def _get_order_for_user_or_admin(
+    db: Session,
+    *,
+    order_id: UUID,
+    current_user: User,
+    for_update: bool = False,
+) -> Order:
+    query = db.query(Order).filter(Order.id == order_id)
+
+    if not _is_admin(current_user):
+        query = query.filter(Order.user_id == current_user.id)
+
+    if for_update:
+        query = query.with_for_update()
+
+    order = query.first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    return order
 
 
 def _payment_transaction_exists(
@@ -213,6 +246,7 @@ def _build_stripe_line_items(db: Session, order: Order) -> list[dict]:
     )
 
     line_items: list[dict] = []
+
     for order_item in order_items:
         item = db.query(Item).filter(Item.id == order_item.item_id).first()
         item_title = item.title if item else f"Item {order_item.item_id}"
@@ -256,48 +290,63 @@ def _build_stripe_line_items(db: Session, order: Order) -> list[dict]:
 def _stripe_value(obj, key, default=None):
     if obj is None:
         return default
+
     if isinstance(obj, dict):
         return obj.get(key, default)
+
     return getattr(obj, key, default)
 
 
 def _get_payment_intent_id(stripe_session) -> str | None:
     payment_intent = _stripe_value(stripe_session, "payment_intent")
+
     if not payment_intent:
         return None
+
     if isinstance(payment_intent, str):
         return payment_intent
+
     return _stripe_value(payment_intent, "id")
 
 
 def _get_payment_intent_status(stripe_session) -> str | None:
     payment_intent = _stripe_value(stripe_session, "payment_intent")
+
     if not payment_intent or isinstance(payment_intent, str):
         return None
+
     return _stripe_value(payment_intent, "status")
 
 
 def _get_payment_intent_amount(stripe_session) -> int:
     payment_intent = _stripe_value(stripe_session, "payment_intent")
+
     if payment_intent and not isinstance(payment_intent, str):
         return int(_stripe_value(payment_intent, "amount", 0) or 0)
+
     return int(_stripe_value(stripe_session, "amount_total", 0) or 0)
 
 
 def _get_payment_intent_currency(stripe_session) -> str:
     payment_intent = _stripe_value(stripe_session, "payment_intent")
+
     if payment_intent and not isinstance(payment_intent, str):
         return _stripe_value(payment_intent, "currency", settings.stripe_currency)
+
     return _stripe_value(stripe_session, "currency", settings.stripe_currency)
 
 
 def _get_latest_charge_id(stripe_session) -> str | None:
     payment_intent = _stripe_value(stripe_session, "payment_intent")
+
     if not payment_intent or isinstance(payment_intent, str):
         return None
+
     latest_charge = _stripe_value(payment_intent, "latest_charge")
+
     if isinstance(latest_charge, str):
         return latest_charge
+
     return _stripe_value(latest_charge, "id")
 
 
@@ -321,6 +370,7 @@ def _sync_stripe_session_state(
         .filter(StripeCheckoutSession.provider_session_id == provider_session_id)
         .first()
     )
+
     if not checkout_session:
         checkout_session = StripeCheckoutSession(
             payment_id=payment.id,
@@ -355,8 +405,10 @@ def _sync_stripe_session_state(
     )
     checkout_session.expires_at = _stripe_dt(_stripe_value(stripe_session, "expires_at"))
     checkout_session.updated_at = now
+
     if session_status == "complete":
         checkout_session.completed_at = checkout_session.completed_at or now
+
     if session_status == "expired":
         checkout_session.expired_at = checkout_session.expired_at or now
 
@@ -372,6 +424,7 @@ def _sync_stripe_session_state(
             .filter(StripePaymentIntent.provider_payment_intent_id == payment_intent_id)
             .first()
         )
+
         if not payment_intent:
             payment_intent = StripePaymentIntent(
                 payment_id=payment.id,
@@ -389,8 +442,10 @@ def _sync_stripe_session_state(
             payment_intent.updated_at = now
 
         payment_intent.latest_charge_id = _get_latest_charge_id(stripe_session)
+
         if intent_status == "succeeded":
             payment_intent.succeeded_at = payment_intent.succeeded_at or now
+
         if intent_status == "canceled":
             payment_intent.canceled_at = payment_intent.canceled_at or now
 
@@ -401,6 +456,7 @@ def _sync_stripe_session_state(
         payment.paid_at = payment.paid_at or now
 
         order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+
         for order_item in order_items:
             order_item.status = "paid"
             order_item.updated_at = now
@@ -433,6 +489,7 @@ def _sync_stripe_session_state(
                 stripe_checkout_session_id=provider_session_id,
                 stripe_payment_intent_id=payment_intent_id,
             )
+
     elif session_status == "expired":
         order.status = "payment_expired"
         payment.status = "expired"
@@ -470,12 +527,14 @@ def _sync_stripe_session_state(
                 payment=payment,
                 error_message="Stripe checkout session completed without paid status",
             )
-    else: 
+
+    else:
         if payment.status not in PAYMENT_TERMINAL_STATUSES:
             payment.status = "processing"
 
     order.updated_at = now
     payment.updated_at = now
+
     db.add(order)
     db.add(payment)
     db.add(checkout_session)
@@ -511,6 +570,7 @@ def create_order_from_cart(
             .with_for_update()
             .first()
         )
+
         if not cart:
             raise HTTPException(status_code=400, detail="Active cart is empty")
 
@@ -520,6 +580,7 @@ def create_order_from_cart(
             .order_by(CartItem.created_at.asc())
             .all()
         )
+
         if not cart_items:
             raise HTTPException(status_code=400, detail="Active cart is empty")
 
@@ -565,8 +626,10 @@ def create_order_from_cart(
         )
 
         owner_ids = set()
+
         for cart_item in cart_items:
             item = db.query(Item).filter(Item.id == cart_item.item_id).first()
+
             if not item:
                 raise HTTPException(
                     status_code=400,
@@ -574,6 +637,7 @@ def create_order_from_cart(
                 )
 
             owner_ids.add(item.owner_id)
+
             db.add(
                 OrderItem(
                     order_id=order.id,
@@ -638,7 +702,9 @@ def create_order_from_cart(
 
         db.commit()
         db.refresh(order)
+
         return _order_to_read(db, order)
+
     except Exception:
         db.rollback()
         raise
@@ -655,6 +721,25 @@ def read_my_orders(
         .order_by(Order.created_at.desc())
         .all()
     )
+
+    return [_order_to_read(db, order) for order in orders]
+
+
+@router.get("/admin", response_model=list[OrderRead])
+def read_all_orders_as_admin(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not _is_admin(current_user):
+        raise HTTPException(status_code=403, detail="Only admin can read all orders")
+
+    orders = (
+        db.query(Order)
+        .order_by(Order.updated_at.desc())
+        .limit(200)
+        .all()
+    )
+
     return [_order_to_read(db, order) for order in orders]
 
 
@@ -720,7 +805,7 @@ async def stripe_webhook(
             expand=["payment_intent"],
         )
     except stripe.StripeError as exc:
-        raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}")
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}") from exc
 
     try:
         order_uuid = UUID(str(order_id))
@@ -734,10 +819,12 @@ async def stripe_webhook(
             .with_for_update()
             .first()
         )
+
         if not order:
             return {"received": True, "ignored": True, "reason": "order not found"}
 
         payment = _get_order_payment(db, order.id)
+
         if not payment:
             return {"received": True, "ignored": True, "reason": "payment not found"}
 
@@ -762,6 +849,7 @@ async def stripe_webhook(
             )
 
         db.commit()
+
     except Exception:
         db.rollback()
         raise
@@ -780,6 +868,7 @@ def read_my_paid_rentals(
         .order_by(Order.paid_at.desc().nullslast(), Order.created_at.desc())
         .all()
     )
+
     return [_order_to_read(db, order) for order in orders]
 
 
@@ -796,6 +885,7 @@ def read_owner_paid_rentals(
         .order_by(Order.id, Order.paid_at.desc().nullslast(), Order.created_at.desc())
         .all()
     )
+
     return [_order_to_read(db, order) for order in orders]
 
 
@@ -805,12 +895,12 @@ def read_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    order = db.query(Order).filter(
-        Order.id == order_id,
-        Order.user_id == current_user.id,
-    ).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+    order = _get_order_for_user_or_admin(
+        db,
+        order_id=order_id,
+        current_user=current_user,
+    )
+
     return _order_to_read(db, order)
 
 
@@ -826,14 +916,12 @@ def create_checkout_session(
             detail="STRIPE_SECRET_KEY is not configured",
         )
 
-    order = (
-        db.query(Order)
-        .filter(Order.id == order_id, Order.user_id == current_user.id)
-        .with_for_update()
-        .first()
+    order = _get_order_for_user_or_admin(
+        db,
+        order_id=order_id,
+        current_user=current_user,
+        for_update=True,
     )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
 
     if order.status != "awaiting_payment":
         raise HTTPException(
@@ -842,6 +930,7 @@ def create_checkout_session(
         )
 
     payment = _get_order_payment(db, order.id)
+
     if not payment:
         raise HTTPException(
             status_code=500,
@@ -861,6 +950,7 @@ def create_checkout_session(
         .order_by(StripeCheckoutSession.created_at.desc())
         .first()
     )
+
     if existing_open_session:
         return CheckoutSessionRead(
             order_id=order.id,
@@ -871,10 +961,11 @@ def create_checkout_session(
         )
 
     now = _now()
+
     local_session = StripeCheckoutSession(
         payment_id=payment.id,
         order_id=order.id,
-        user_id=current_user.id,
+        user_id=order.user_id,
         status="creating",
         payment_status="unpaid",
         amount_total_cents=payment.amount_total_cents,
@@ -882,14 +973,17 @@ def create_checkout_session(
         created_at=now,
         updated_at=now,
     )
+
     payment.status = "checkout_creating"
     payment.updated_at = now
+
     _add_transaction(
         db,
         payment,
         tx_type="checkout_session_create_requested",
         tx_status="pending",
     )
+
     db.add(local_session)
     db.add(payment)
     db.commit()
@@ -910,13 +1004,15 @@ def create_checkout_session(
             metadata={
                 "order_id": str(order.id),
                 "payment_id": str(payment.id),
-                "user_id": str(current_user.id),
+                "user_id": str(order.user_id),
+                "started_by_user_id": str(current_user.id),
             },
             payment_intent_data={
                 "metadata": {
                     "order_id": str(order.id),
                     "payment_id": str(payment.id),
-                    "user_id": str(current_user.id),
+                    "user_id": str(order.user_id),
+                    "started_by_user_id": str(current_user.id),
                 }
             },
             idempotency_key=f"dropoff-checkout-session-{order.id}-{payment.id}",
@@ -934,6 +1030,7 @@ def create_checkout_session(
             payment.status = "failed"
             payment.failed_at = _now()
             payment.updated_at = _now()
+
             _add_transaction(
                 db,
                 payment,
@@ -941,6 +1038,7 @@ def create_checkout_session(
                 tx_status="failed",
                 error_message=str(exc),
             )
+
             db.add(payment)
 
         if order:
@@ -969,7 +1067,8 @@ def create_checkout_session(
             db.add(local_session)
 
         db.commit()
-        raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}")
+
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}") from exc
 
     order = db.query(Order).filter(Order.id == order_id).with_for_update().first()
     payment = _get_order_payment(db, order_id)
@@ -1039,16 +1138,15 @@ def confirm_stripe_payment(
             detail="STRIPE_SECRET_KEY is not configured",
         )
 
-    order = (
-        db.query(Order)
-        .filter(Order.id == order_id, Order.user_id == current_user.id)
-        .with_for_update()
-        .first()
+    order = _get_order_for_user_or_admin(
+        db,
+        order_id=order_id,
+        current_user=current_user,
+        for_update=True,
     )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
 
     payment = _get_order_payment(db, order.id)
+
     if not payment:
         raise HTTPException(
             status_code=500,
@@ -1071,7 +1169,7 @@ def confirm_stripe_payment(
             error_message=str(exc),
         )
         db.commit()
-        raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}")
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(exc)}") from exc
 
     stripe_metadata = _stripe_value(stripe_session, "metadata", {}) or {}
     stripe_order_id = (
@@ -1079,6 +1177,7 @@ def confirm_stripe_payment(
         if isinstance(stripe_metadata, dict)
         else _stripe_value(stripe_metadata, "order_id")
     )
+
     if stripe_order_id != str(order.id):
         raise HTTPException(
             status_code=400,
@@ -1092,8 +1191,10 @@ def confirm_stripe_payment(
         stripe_session,
         tx_type="checkout_session_confirmed",
     )
+
     db.commit()
     db.refresh(order)
+
     return _order_to_read(db, order)
 
 
@@ -1103,16 +1204,15 @@ def mark_order_paid_in_sandbox(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    order = (
-        db.query(Order)
-        .filter(Order.id == order_id, Order.user_id == current_user.id)
-        .with_for_update()
-        .first()
+    order = _get_order_for_user_or_admin(
+        db,
+        order_id=order_id,
+        current_user=current_user,
+        for_update=True,
     )
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
 
     payment = _get_order_payment(db, order.id)
+
     if not payment:
         raise HTTPException(
             status_code=500,
@@ -1126,14 +1226,17 @@ def mark_order_paid_in_sandbox(
         )
 
     now = _now()
+
     order.status = "paid"
     order.paid_at = now
     order.updated_at = now
+
     payment.status = "paid"
     payment.paid_at = now
     payment.updated_at = now
 
     order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
+
     for order_item in order_items:
         order_item.status = "paid"
         order_item.updated_at = now
@@ -1157,4 +1260,5 @@ def mark_order_paid_in_sandbox(
     db.add(payment)
     db.commit()
     db.refresh(order)
+
     return _order_to_read(db, order)
