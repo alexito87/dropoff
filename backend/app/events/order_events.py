@@ -116,6 +116,27 @@ def add_order_paid_event_to_outbox(
     )
 
 
+def add_order_activated_event_to_outbox(
+    db: Session,
+    *,
+    order,
+) -> None:
+    event = EventEnvelope(
+        event_type="order.activated",
+        producer="orders-consumer",
+        aggregate_type="Order",
+        aggregate_id=str(order.id),
+        data=_order_payload(order),
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=ORDER_EVENTS_TOPIC,
+        event=event,
+        key=str(order.id),
+    )
+
+
 def add_order_payment_failed_event_to_outbox(
     db: Session,
     *,

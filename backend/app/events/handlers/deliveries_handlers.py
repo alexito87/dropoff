@@ -2,6 +2,10 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.events.business_processes import (
+    apply_delivery_event_to_order,
+    ensure_rental_for_delivery_completed_event,
+)
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -9,7 +13,12 @@ from app.events.handlers.base import (
     require_data_fields,
     require_event_fields,
 )
-from app.events.projection_utils import apply_values, get_event_data, get_or_create_projection, source_fields
+from app.events.projection_utils import (
+    apply_values,
+    get_event_data,
+    get_or_create_projection,
+    source_fields,
+)
 from app.models.event_projection import OrdersDeliveryProjection
 
 
@@ -49,9 +58,12 @@ def handle_delivery_created(db: Session, event: dict[str, Any]) -> EventHandling
 
     _upsert_orders_delivery_projection(db, event)
 
+    order_result = apply_delivery_event_to_order(db, event)
+
     return processed(
-        "Delivery created event projected to orders delivery projection",
+        "Delivery created event projected and applied to order",
         target_contexts=["orders"],
+        business_result=order_result,
     )
 
 
@@ -63,9 +75,16 @@ def handle_delivery_completed(db: Session, event: dict[str, Any]) -> EventHandli
 
     _upsert_orders_delivery_projection(db, event)
 
+    order_result = apply_delivery_event_to_order(db, event)
+    rental_result = ensure_rental_for_delivery_completed_event(db, event)
+
     return processed(
-        "Delivery completed event projected to orders delivery projection",
-        target_contexts=["orders"],
+        "Delivery completed event projected, applied to order, and rental creation checked",
+        target_contexts=["orders", "rentals"],
+        business_result={
+            "order_result": order_result,
+            "rental_result": rental_result,
+        },
     )
 
 
@@ -77,9 +96,12 @@ def handle_delivery_return_requested(db: Session, event: dict[str, Any]) -> Even
 
     _upsert_orders_delivery_projection(db, event)
 
+    order_result = apply_delivery_event_to_order(db, event)
+
     return processed(
-        "Delivery return requested event projected to orders delivery projection",
+        "Delivery return requested event projected and applied to order",
         target_contexts=["orders"],
+        business_result=order_result,
     )
 
 
@@ -91,7 +113,10 @@ def handle_delivery_cancelled(db: Session, event: dict[str, Any]) -> EventHandli
 
     _upsert_orders_delivery_projection(db, event)
 
+    order_result = apply_delivery_event_to_order(db, event)
+
     return processed(
-        "Delivery cancelled event projected to orders delivery projection",
+        "Delivery cancelled event projected and applied to order",
         target_contexts=["orders"],
+        business_result=order_result,
     )

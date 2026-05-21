@@ -26,10 +26,55 @@ def add_rental_created_event_to_outbox(
     db: Session,
     *,
     rental,
+    producer: str = "rentals-endpoint",
 ) -> None:
     event = EventEnvelope(
         event_type="rental.created",
-        producer="rentals-endpoint",
+        producer=producer,
+        aggregate_type="Rental",
+        aggregate_id=str(rental.id),
+        data=_rental_payload(rental),
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=RENTAL_EVENTS_TOPIC,
+        event=event,
+        key=str(rental.id),
+    )
+
+
+def add_rental_approved_event_to_outbox(
+    db: Session,
+    *,
+    rental,
+    producer: str = "rentals-endpoint",
+) -> None:
+    event = EventEnvelope(
+        event_type="rental.approved",
+        producer=producer,
+        aggregate_type="Rental",
+        aggregate_id=str(rental.id),
+        data=_rental_payload(rental),
+    )
+
+    add_event_to_outbox(
+        db,
+        topic=RENTAL_EVENTS_TOPIC,
+        event=event,
+        key=str(rental.id),
+    )
+
+
+def add_rental_rejected_event_to_outbox(
+    db: Session,
+    *,
+    rental,
+    producer: str = "rentals-endpoint",
+) -> None:
+    event = EventEnvelope(
+        event_type="rental.rejected",
+        producer=producer,
         aggregate_type="Rental",
         aggregate_id=str(rental.id),
         data=_rental_payload(rental),
@@ -47,10 +92,11 @@ def add_rental_started_event_to_outbox(
     db: Session,
     *,
     rental,
+    producer: str = "rentals-endpoint",
 ) -> None:
     event = EventEnvelope(
         event_type="rental.started",
-        producer="rentals-endpoint",
+        producer=producer,
         aggregate_type="Rental",
         aggregate_id=str(rental.id),
         data=_rental_payload(rental),
@@ -68,10 +114,11 @@ def add_rental_completed_event_to_outbox(
     db: Session,
     *,
     rental,
+    producer: str = "rentals-endpoint",
 ) -> None:
     event = EventEnvelope(
         event_type="rental.completed",
-        producer="rentals-endpoint",
+        producer=producer,
         aggregate_type="Rental",
         aggregate_id=str(rental.id),
         data=_rental_payload(rental),
@@ -89,10 +136,11 @@ def add_rental_cancelled_event_to_outbox(
     db: Session,
     *,
     rental,
+    producer: str = "rentals-endpoint",
 ) -> None:
     event = EventEnvelope(
         event_type="rental.cancelled",
-        producer="rentals-endpoint",
+        producer=producer,
         aggregate_type="Rental",
         aggregate_id=str(rental.id),
         data=_rental_payload(rental),

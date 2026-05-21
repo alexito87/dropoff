@@ -15,3 +15,11 @@ export function removeCartItem(cartItemId) {
 export function clearCart() {
   return apiDelete('/api/v1/cart', true)
 }
+
+export function requestCartCheckout(payload) {
+  return apiPost('/api/v1/cart/checkout-request', payload, true)
+}
+
+export function getCartCheckoutStatus(cartId) {
+  return apiGet(`/api/v1/cart/checkout-status?cart_id=${encodeURIComponent(cartId)}`, true)
+}

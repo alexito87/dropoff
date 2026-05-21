@@ -9,10 +9,11 @@ def add_notification_created_event_to_outbox(
     db: Session,
     *,
     notification,
+    producer: str = "notifications-helper",
 ) -> None:
     event = EventEnvelope(
         event_type="notification.created",
-        producer="notifications-helper",
+        producer=producer,
         aggregate_type="Notification",
         aggregate_id=str(notification.id),
         data={

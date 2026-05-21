@@ -1,25 +1,60 @@
 import uuid
 from datetime import date, datetime, timezone
 from typing import Any
+import stripe
+from app.modules.users.models.user import User
 
 from sqlalchemy.orm import Session
 
+from app.events.rental_events import (
+    add_rental_created_event_to_outbox,
+    add_rental_started_event_to_outbox,
+)
+
+from app.core.config import settings
+from app.events.cart_events import add_cart_converted_to_order_event_to_outbox
 from app.events.delivery_events import add_delivery_created_event_to_outbox
+from app.events.item_events import (
+    add_item_published_event_to_outbox as add_item_published_domain_event_to_outbox,
+    add_item_rejected_event_to_outbox as add_item_rejected_domain_event_to_outbox,
+)
+from app.events.notification_events import add_notification_created_event_to_outbox
 from app.events.order_events import (
     add_order_activated_event_to_outbox,
     add_order_completed_event_to_outbox,
+    add_order_created_event_to_outbox,
     add_order_paid_event_to_outbox,
     add_order_payment_expired_event_to_outbox,
     add_order_payment_failed_event_to_outbox,
 )
 from app.events.outbox import add_event_to_outbox
+from app.events.payment_events import (
+    add_checkout_session_created_event_to_outbox,
+    add_payment_created_event_to_outbox,
+    add_payment_failed_event_to_outbox,
+)
 from app.events.projection_utils import get_event_data, parse_event_datetime
 from app.events.schemas import EventEnvelope
 from app.events.topics import PAYMENT_EVENTS_TOPIC
 from app.modules.deliveries.models.delivery import Delivery
+from app.modules.items.models.item import Item
+from app.modules.notifications.models.notification import Notification
+from app.modules.orders.models.cart import Cart, CartItem
 from app.modules.orders.models.order import Order, OrderItem
-from app.modules.payments.models.payment import Payment
+from app.modules.payments.models.payment import (
+    Payment,
+    PaymentTransaction,
+    StripeCheckoutSession,
+)
 from app.modules.rentals.models.rental import Rental
+
+
+CHECKOUT_DELIVERY_METHODS = {
+    "pickup": 0,
+    "courier_standard": 1200,
+}
+
+CHECKOUT_SUPPORTED_PAYMENT_METHODS = {"stripe_checkout"}
 
 
 def _now() -> datetime:
@@ -973,4 +1008,864 @@ def apply_rental_event_to_order(
         "order_id": str(order.id),
         "order_item_id": str(order_item.id),
         "rental_id": str(rental.id) if rental else data.get("rental_id"),
+    }
+
+
+def create_order_from_cart_checkout_requested_event(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+
+    cart_id = _parse_uuid(data.get("cart_id"))
+    user_id = _parse_uuid(data.get("user_id"))
+    delivery_method = data.get("delivery_method")
+    payment_method = data.get("payment_method") or "stripe_checkout"
+
+    if cart_id is None:
+        return {
+            "order_created": False,
+            "reason": "invalid_cart_id",
+        }
+
+    if user_id is None:
+        return {
+            "order_created": False,
+            "reason": "invalid_user_id",
+            "cart_id": str(cart_id),
+        }
+
+    if delivery_method not in CHECKOUT_DELIVERY_METHODS:
+        return {
+            "order_created": False,
+            "reason": "unsupported_delivery_method",
+            "cart_id": str(cart_id),
+            "delivery_method": delivery_method,
+        }
+
+    if payment_method not in CHECKOUT_SUPPORTED_PAYMENT_METHODS:
+        return {
+            "order_created": False,
+            "reason": "unsupported_payment_method",
+            "cart_id": str(cart_id),
+            "payment_method": payment_method,
+        }
+
+    cart = (
+        db.query(Cart)
+        .filter(Cart.id == cart_id, Cart.user_id == user_id)
+        .with_for_update()
+        .first()
+    )
+
+    if cart is None:
+        return {
+            "order_created": False,
+            "reason": "cart_not_found",
+            "cart_id": str(cart_id),
+            "user_id": str(user_id),
+        }
+
+    existing_order = (
+        db.query(Order)
+        .filter(Order.cart_id == cart.id)
+        .order_by(Order.created_at.desc())
+        .first()
+    )
+
+    if existing_order:
+        return {
+            "order_created": False,
+            "reason": "order_already_exists_for_cart",
+            "cart_id": str(cart.id),
+            "order_id": str(existing_order.id),
+            "order_status": existing_order.status,
+        }
+
+    if cart.status != "active":
+        return {
+            "order_created": False,
+            "reason": "cart_is_not_active",
+            "cart_id": str(cart.id),
+            "cart_status": cart.status,
+        }
+
+    cart_items = (
+        db.query(CartItem)
+        .filter(CartItem.cart_id == cart.id)
+        .order_by(CartItem.created_at.asc())
+        .all()
+    )
+
+    if not cart_items:
+        return {
+            "order_created": False,
+            "reason": "cart_is_empty",
+            "cart_id": str(cart.id),
+        }
+
+    items_total = sum(item.rent_total_cents for item in cart_items)
+    deposit_total = sum(item.total_deposit_cents for item in cart_items)
+    delivery_fee = CHECKOUT_DELIVERY_METHODS[delivery_method]
+    total_amount = items_total + deposit_total + delivery_fee
+    now = _now()
+
+    order = Order(
+        user_id=user_id,
+        cart_id=cart.id,
+        status="awaiting_payment",
+        delivery_method=delivery_method,
+        payment_method=payment_method,
+        items_total_cents=items_total,
+        deposit_total_cents=deposit_total,
+        delivery_fee_cents=delivery_fee,
+        total_amount_cents=total_amount,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(order)
+    db.flush()
+
+    payment = Payment(
+        order_id=order.id,
+        payer_user_id=user_id,
+        status="pending",
+        provider="stripe",
+        payment_method=payment_method,
+        amount_total_cents=total_amount,
+        currency=settings.stripe_currency,
+        created_at=now,
+        updated_at=now,
+    )
+    db.add(payment)
+    db.flush()
+
+    add_payment_created_event_to_outbox(
+        db,
+        payment=payment,
+    )
+
+    for cart_item in cart_items:
+        item = db.query(Item).filter(Item.id == cart_item.item_id).first()
+
+        if item is None:
+            return {
+                "order_created": False,
+                "reason": "cart_item_item_not_found",
+                "cart_id": str(cart.id),
+                "cart_item_id": str(cart_item.id),
+                "item_id": str(cart_item.item_id),
+            }
+
+        db.add(
+            OrderItem(
+                order_id=order.id,
+                item_id=item.id,
+                owner_id=item.owner_id,
+                rent_start=cart_item.rent_start,
+                rent_end=cart_item.rent_end,
+                quantity=cart_item.quantity,
+                status="awaiting_payment",
+                daily_price_cents=cart_item.daily_price_cents,
+                deposit_cents=cart_item.deposit_cents,
+                rent_total_cents=cart_item.rent_total_cents,
+                total_deposit_cents=cart_item.total_deposit_cents,
+                line_total_cents=cart_item.rent_total_cents
+                + cart_item.total_deposit_cents,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    cart.status = "converted"
+    cart.updated_at = now
+    db.add(cart)
+
+    add_order_created_event_to_outbox(
+        db,
+        order=order,
+        payment=payment,
+        cart=cart,
+        cart_items=cart_items,
+        user_id=user_id,
+    )
+
+    add_cart_converted_to_order_event_to_outbox(
+        db,
+        cart=cart,
+        order=order,
+        user_id=user_id,
+    )
+
+    return {
+        "order_created": True,
+        "reason": "order_created_from_cart_checkout_requested_event",
+        "cart_id": str(cart.id),
+        "order_id": str(order.id),
+        "payment_id": str(payment.id),
+        "order_status": order.status,
+        "published_events": [
+            "payment.created",
+            "order.created",
+            "cart.converted_to_order",
+        ],
+    }
+
+
+def apply_moderation_event_to_item(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+    event_type = str(event.get("event_type") or "")
+
+    item_id = _parse_uuid(data.get("item_id"))
+    moderator_user_id = _parse_uuid(data.get("moderator_user_id"))
+    occurred_at = _event_time_or_now(event)
+
+    if item_id is None:
+        return {
+            "item_updated": False,
+            "reason": "invalid_item_id",
+            "event_type": event_type,
+        }
+
+    item = db.query(Item).filter(Item.id == item_id).first()
+
+    if item is None:
+        return {
+            "item_updated": False,
+            "reason": "item_not_found",
+            "event_type": event_type,
+            "item_id": str(item_id),
+        }
+
+    previous_status = data.get("previous_status") or item.status
+    moderation_comment = data.get("moderation_comment")
+
+    if event_type == "moderation.item_approved":
+        target_status = data.get("target_status") or "published"
+        item.status = target_status
+        item.moderated_by = moderator_user_id
+        item.moderated_at = occurred_at
+        item.moderation_comment = moderation_comment
+        item.updated_at = _now()
+        db.add(item)
+        db.flush()
+
+        notification = Notification(
+            user_id=item.owner_id,
+            type="item_approved",
+            payload={
+                "item_id": str(item.id),
+                "title": item.title,
+                "status": item.status,
+                "moderator_user_id": str(moderator_user_id) if moderator_user_id else None,
+            },
+        )
+        db.add(notification)
+        db.flush()
+
+        add_item_published_domain_event_to_outbox(
+            db,
+            item=item,
+            moderator_user_id=moderator_user_id,
+            previous_status=previous_status,
+        )
+
+        add_notification_created_event_to_outbox(
+            db,
+            notification=notification,
+        )
+
+        return {
+            "item_updated": True,
+            "reason": "moderation_approved_item_published",
+            "item_id": str(item.id),
+            "previous_status": previous_status,
+            "target_status": item.status,
+            "published_events": ["item.published", "notification.created"],
+        }
+
+    if event_type == "moderation.item_rejected":
+        target_status = data.get("target_status") or "rejected"
+        item.status = target_status
+        item.moderated_by = moderator_user_id
+        item.moderated_at = occurred_at
+        item.moderation_comment = moderation_comment
+        item.updated_at = _now()
+        db.add(item)
+        db.flush()
+
+        notification = Notification(
+            user_id=item.owner_id,
+            type="item_rejected",
+            payload={
+                "item_id": str(item.id),
+                "title": item.title,
+                "status": item.status,
+                "moderation_comment": item.moderation_comment,
+                "moderator_user_id": str(moderator_user_id) if moderator_user_id else None,
+            },
+        )
+        db.add(notification)
+        db.flush()
+
+        add_item_rejected_domain_event_to_outbox(
+            db,
+            item=item,
+            moderator_user_id=moderator_user_id,
+            previous_status=previous_status,
+        )
+
+        add_notification_created_event_to_outbox(
+            db,
+            notification=notification,
+        )
+
+        return {
+            "item_updated": True,
+            "reason": "moderation_rejected_item_rejected",
+            "item_id": str(item.id),
+            "previous_status": previous_status,
+            "target_status": item.status,
+            "published_events": ["item.rejected", "notification.created"],
+        }
+
+    if event_type == "moderation.item_needs_changes":
+        target_status = data.get("target_status") or "rejected"
+        item.status = target_status
+        item.moderated_by = moderator_user_id
+        item.moderated_at = occurred_at
+        item.moderation_comment = moderation_comment
+        item.updated_at = _now()
+        db.add(item)
+        db.flush()
+
+        notification = Notification(
+            user_id=item.owner_id,
+            type="item_needs_changes",
+            payload={
+                "item_id": str(item.id),
+                "title": item.title,
+                "status": item.status,
+                "moderation_comment": item.moderation_comment,
+                "moderator_user_id": str(moderator_user_id) if moderator_user_id else None,
+            },
+        )
+        db.add(notification)
+        db.flush()
+
+        add_item_rejected_domain_event_to_outbox(
+            db,
+            item=item,
+            moderator_user_id=moderator_user_id,
+            previous_status=previous_status,
+        )
+
+        add_notification_created_event_to_outbox(
+            db,
+            notification=notification,
+        )
+
+        return {
+            "item_updated": True,
+            "reason": "moderation_needs_changes_item_rejected",
+            "item_id": str(item.id),
+            "previous_status": previous_status,
+            "target_status": item.status,
+            "published_events": ["item.rejected", "notification.created"],
+        }
+
+    return {
+        "item_updated": False,
+        "reason": "moderation_event_does_not_require_item_change",
+        "event_type": event_type,
+        "item_id": str(item.id),
+    }
+def _stripe_datetime(timestamp_value: Any) -> datetime | None:
+    if not timestamp_value:
+        return None
+
+    try:
+        return datetime.fromtimestamp(int(timestamp_value), tz=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stripe_value(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+
+    return getattr(obj, key, default)
+
+
+def _add_payment_transaction(
+    db: Session,
+    *,
+    payment: Payment,
+    tx_type: str,
+    tx_status: str,
+    provider_tx_id: str | None = None,
+    error_message: str | None = None,
+) -> PaymentTransaction:
+    transaction = PaymentTransaction(
+        payment_id=payment.id,
+        order_id=payment.order_id,
+        provider=payment.provider,
+        type=tx_type,
+        status=tx_status,
+        amount_cents=payment.amount_total_cents,
+        currency=payment.currency,
+        provider_tx_id=provider_tx_id,
+        error_message=error_message,
+    )
+
+    db.add(transaction)
+
+    return transaction
+
+
+def _build_checkout_line_items(
+    db: Session,
+    *,
+    order: Order,
+) -> list[dict[str, Any]]:
+    order_items = (
+        db.query(OrderItem)
+        .filter(OrderItem.order_id == order.id)
+        .order_by(OrderItem.created_at.asc())
+        .all()
+    )
+
+    line_items: list[dict[str, Any]] = []
+
+    for order_item in order_items:
+        item = db.query(Item).filter(Item.id == order_item.item_id).first()
+        item_title = item.title if item else f"Item {order_item.item_id}"
+
+        line_items.append(
+            {
+                "price_data": {
+                    "currency": settings.stripe_currency,
+                    "unit_amount": order_item.line_total_cents,
+                    "product_data": {
+                        "name": item_title,
+                        "description": (
+                            f"Rental: {order_item.rent_start} — {order_item.rent_end}. "
+                            f"Including deposit: {order_item.total_deposit_cents / 100:.2f} "
+                            f"{settings.stripe_currency.upper()}"
+                        ),
+                    },
+                },
+                "quantity": order_item.quantity,
+            }
+        )
+
+    if order.delivery_fee_cents > 0:
+        line_items.append(
+            {
+                "price_data": {
+                    "currency": settings.stripe_currency,
+                    "unit_amount": order.delivery_fee_cents,
+                    "product_data": {
+                        "name": "Delivery",
+                        "description": order.delivery_method,
+                    },
+                },
+                "quantity": 1,
+            }
+        )
+
+    return line_items
+
+
+def ensure_checkout_session_for_payment_created_event(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+
+    payment_id = _parse_uuid(data.get("payment_id"))
+    order_id = _parse_uuid(data.get("order_id"))
+
+    if payment_id is None:
+        return {
+            "checkout_session_created": False,
+            "reason": "invalid_payment_id",
+        }
+
+    if order_id is None:
+        return {
+            "checkout_session_created": False,
+            "reason": "invalid_order_id",
+            "payment_id": str(payment_id),
+        }
+
+    payment = (
+        db.query(Payment)
+        .filter(Payment.id == payment_id)
+        .with_for_update()
+        .first()
+    )
+
+    if payment is None:
+        return {
+            "checkout_session_created": False,
+            "reason": "payment_not_found",
+            "payment_id": str(payment_id),
+        }
+
+    order = (
+        db.query(Order)
+        .filter(Order.id == order_id)
+        .with_for_update()
+        .first()
+    )
+
+    if order is None:
+        return {
+            "checkout_session_created": False,
+            "reason": "order_not_found",
+            "payment_id": str(payment.id),
+            "order_id": str(order_id),
+        }
+
+    if payment.payment_method != "stripe_checkout":
+        return {
+            "checkout_session_created": False,
+            "reason": "payment_method_does_not_need_checkout_session",
+            "payment_id": str(payment.id),
+            "payment_method": payment.payment_method,
+        }
+
+    if order.status != "awaiting_payment":
+        return {
+            "checkout_session_created": False,
+            "reason": "order_is_not_awaiting_payment",
+            "payment_id": str(payment.id),
+            "order_id": str(order.id),
+            "order_status": order.status,
+        }
+
+    existing_open_session = (
+        db.query(StripeCheckoutSession)
+        .filter(
+            StripeCheckoutSession.payment_id == payment.id,
+            StripeCheckoutSession.status == "open",
+            StripeCheckoutSession.checkout_url.isnot(None),
+        )
+        .order_by(StripeCheckoutSession.created_at.desc())
+        .first()
+    )
+
+    if existing_open_session:
+        return {
+            "checkout_session_created": False,
+            "reason": "open_checkout_session_already_exists",
+            "payment_id": str(payment.id),
+            "order_id": str(order.id),
+            "stripe_checkout_session_id": existing_open_session.provider_session_id,
+            "checkout_url": existing_open_session.checkout_url,
+        }
+
+    if not settings.stripe_secret_key:
+        return {
+            "checkout_session_created": False,
+            "reason": "stripe_secret_key_not_configured",
+            "payment_id": str(payment.id),
+            "order_id": str(order.id),
+        }
+
+    payer = db.query(User).filter(User.id == payment.payer_user_id).first()
+    now = _now()
+
+    local_session = StripeCheckoutSession(
+        payment_id=payment.id,
+        order_id=order.id,
+        user_id=order.user_id,
+        status="creating",
+        payment_status="unpaid",
+        amount_total_cents=payment.amount_total_cents,
+        currency=payment.currency,
+        created_at=now,
+        updated_at=now,
+    )
+
+    payment.status = "checkout_creating"
+    payment.updated_at = now
+
+    _add_payment_transaction(
+        db,
+        payment=payment,
+        tx_type="checkout_session_create_requested_by_consumer",
+        tx_status="pending",
+    )
+
+    db.add(local_session)
+    db.add(payment)
+    db.flush()
+
+    stripe.api_key = settings.stripe_secret_key
+
+    success_url = (
+        f"{settings.frontend_url}/orders/{order.id}/success"
+        f"?session_id={{CHECKOUT_SESSION_ID}}"
+    )
+    cancel_url = f"{settings.frontend_url}/checkout?cancelled=1"
+
+    try:
+        stripe_session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=_build_checkout_line_items(db, order=order),
+            customer_email=payer.email if payer else None,
+            client_reference_id=str(order.id),
+            success_url=success_url,
+            cancel_url=cancel_url,
+            metadata={
+                "order_id": str(order.id),
+                "payment_id": str(payment.id),
+                "user_id": str(order.user_id),
+                "created_by": "payment.created.consumer",
+            },
+            payment_intent_data={
+                "metadata": {
+                    "order_id": str(order.id),
+                    "payment_id": str(payment.id),
+                    "user_id": str(order.user_id),
+                    "created_by": "payment.created.consumer",
+                }
+            },
+            idempotency_key=f"dropoff-checkout-session-{order.id}-{payment.id}",
+        )
+
+    except stripe.StripeError as exc:
+        now = _now()
+
+        payment.status = "failed"
+        payment.failed_at = payment.failed_at or now
+        payment.updated_at = now
+
+        order.status = "payment_failed"
+        order.updated_at = now
+
+        local_session.status = "failed"
+        local_session.updated_at = now
+
+        _add_payment_transaction(
+            db,
+            payment=payment,
+            tx_type="checkout_session_create_failed_by_consumer",
+            tx_status="failed",
+            error_message=str(exc),
+        )
+
+        db.add(payment)
+        db.add(order)
+        db.add(local_session)
+
+        add_order_payment_failed_event_to_outbox(
+            db,
+            order=order,
+            payment=payment,
+            error_message=str(exc),
+        )
+
+        add_payment_failed_event_to_outbox(
+            db,
+            order=order,
+            payment=payment,
+            error_message=str(exc),
+        )
+
+        return {
+            "checkout_session_created": False,
+            "reason": "stripe_error",
+            "payment_id": str(payment.id),
+            "order_id": str(order.id),
+            "error": str(exc),
+            "published_events": [
+                "order.payment_failed",
+                "payment.failed",
+            ],
+        }
+
+    now = _now()
+
+    local_session.provider_session_id = stripe_session.id
+    local_session.status = _stripe_value(stripe_session, "status", "open") or "open"
+    local_session.payment_status = (
+        _stripe_value(stripe_session, "payment_status", "unpaid") or "unpaid"
+    )
+    local_session.checkout_url = _stripe_value(stripe_session, "url")
+    local_session.expires_at = _stripe_datetime(_stripe_value(stripe_session, "expires_at"))
+    local_session.updated_at = now
+
+    payment.status = "checkout_created"
+    payment.stripe_checkout_session_id = stripe_session.id
+    payment.updated_at = now
+
+    order.stripe_checkout_session_id = stripe_session.id
+    order.updated_at = now
+
+    _add_payment_transaction(
+        db,
+        payment=payment,
+        tx_type="checkout_session_created_by_consumer",
+        tx_status="success",
+        provider_tx_id=stripe_session.id,
+    )
+
+    db.add(local_session)
+    db.add(payment)
+    db.add(order)
+
+    add_checkout_session_created_event_to_outbox(
+        db,
+        order=order,
+        payment=payment,
+        checkout_session_id=stripe_session.id,
+        checkout_url=_stripe_value(stripe_session, "url"),
+    )
+
+    return {
+        "checkout_session_created": True,
+        "reason": "checkout_session_created_from_payment_created_event",
+        "payment_id": str(payment.id),
+        "order_id": str(order.id),
+        "stripe_checkout_session_id": stripe_session.id,
+        "checkout_url": _stripe_value(stripe_session, "url"),
+        "published_events": [
+            "payment.checkout_session_created",
+        ],
+    }
+def ensure_rental_for_delivery_completed_event(
+    db: Session,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    data = get_event_data(event)
+    event_type = str(event.get("event_type") or "")
+
+    if event_type != "delivery.completed":
+        return {
+            "rental_created": False,
+            "reason": "event_is_not_delivery_completed",
+            "event_type": event_type,
+        }
+
+    order_id = _parse_uuid(data.get("order_id"))
+    order_item_id = _parse_uuid(data.get("order_item_id"))
+    delivery_id = _parse_uuid(data.get("delivery_id"))
+
+    if order_id is None:
+        return {
+            "rental_created": False,
+            "reason": "invalid_order_id",
+            "delivery_id": data.get("delivery_id"),
+        }
+
+    if order_item_id is None:
+        return {
+            "rental_created": False,
+            "reason": "invalid_order_item_id",
+            "order_id": str(order_id),
+            "delivery_id": data.get("delivery_id"),
+        }
+
+    order = db.query(Order).filter(Order.id == order_id).first()
+
+    if order is None:
+        return {
+            "rental_created": False,
+            "reason": "order_not_found",
+            "order_id": str(order_id),
+            "delivery_id": str(delivery_id) if delivery_id else data.get("delivery_id"),
+        }
+
+    order_item = (
+        db.query(OrderItem)
+        .filter(OrderItem.id == order_item_id, OrderItem.order_id == order.id)
+        .first()
+    )
+
+    if order_item is None:
+        return {
+            "rental_created": False,
+            "reason": "order_item_not_found",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item_id),
+            "delivery_id": str(delivery_id) if delivery_id else data.get("delivery_id"),
+        }
+
+    existing_rental = (
+        db.query(Rental)
+        .filter(
+            Rental.item_id == order_item.item_id,
+            Rental.renter_id == order.user_id,
+            Rental.start_date == order_item.rent_start,
+            Rental.end_date == order_item.rent_end,
+        )
+        .order_by(Rental.created_at.desc())
+        .first()
+    )
+
+    if existing_rental:
+        return {
+            "rental_created": False,
+            "reason": "rental_already_exists",
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "rental_id": str(existing_rental.id),
+            "rental_status": existing_rental.status,
+        }
+
+    rental = Rental(
+        item_id=order_item.item_id,
+        renter_id=order.user_id,
+        status="active",
+        start_date=order_item.rent_start,
+        end_date=order_item.rent_end,
+        daily_price_cents=order_item.daily_price_cents,
+        deposit_cents=order_item.deposit_cents,
+        total_estimate_cents=order_item.rent_total_cents + order_item.total_deposit_cents,
+        owner_comment=(
+            "Created automatically from delivery.completed"
+            if delivery_id is None
+            else f"Created automatically from delivery.completed: {delivery_id}"
+        ),
+        created_at=_now(),
+        updated_at=_now(),
+    )
+
+    db.add(rental)
+    db.flush()
+
+    add_rental_created_event_to_outbox(
+        db,
+        rental=rental,
+        producer="deliveries-consumer",
+    )
+
+    add_rental_started_event_to_outbox(
+        db,
+        rental=rental,
+        producer="deliveries-consumer",
+    )
+
+    return {
+        "rental_created": True,
+        "reason": "rental_created_from_delivery_completed_event",
+        "order_id": str(order.id),
+        "order_item_id": str(order_item.id),
+        "delivery_id": str(delivery_id) if delivery_id else data.get("delivery_id"),
+        "rental_id": str(rental.id),
+        "rental_status": rental.status,
+        "published_events": [
+            "rental.created",
+            "rental.started",
+        ],
     }

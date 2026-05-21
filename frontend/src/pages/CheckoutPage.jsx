@@ -1,26 +1,43 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import EmptyState from '../components/common/EmptyState'
-import { getActiveCart } from '../api/cart'
-import { createCheckoutSession, createOrder } from '../api/orders'
+import {
+  getActiveCart,
+  getCartCheckoutStatus,
+  requestCartCheckout,
+} from '../api/cart'
 
 function money(cents) {
   return `$${(cents / 100).toFixed(2)}`
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 const DELIVERY_OPTIONS = [
-  { code: 'pickup', title: 'Самовывоз', description: 'Забрать вещь у владельца', fee: 0 },
-  { code: 'courier_standard', title: 'Стандартная доставка', description: 'Учебный тариф доставки для MVP', fee: 1200 },
+  {
+    code: 'pickup',
+    title: 'Самовывоз',
+    description: 'Забрать вещь у владельца',
+    fee: 0,
+  },
+  {
+    code: 'courier_standard',
+    title: 'Стандартная доставка',
+    description: 'Учебный тариф доставки для MVP',
+    fee: 1200,
+  },
 ]
 
 export default function CheckoutPage() {
-  const navigate = useNavigate()
   const [cart, setCart] = useState(null)
   const [deliveryMethod, setDeliveryMethod] = useState('pickup')
   const [paymentMethod, setPaymentMethod] = useState('stripe_checkout')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [checkoutMessage, setCheckoutMessage] = useState('')
 
   useEffect(() => {
     async function loadCart() {
@@ -45,20 +62,59 @@ export default function CheckoutPage() {
 
   const total = (cart?.payable_total_cents || 0) + deliveryFee
 
+  async function waitForCheckoutStatus(cartId) {
+    let lastStatus = null
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await getCartCheckoutStatus(cartId)
+      lastStatus = status
+
+      if (status.checkout_url) {
+        return status
+      }
+
+      if (['payment_failed', 'checkout_failed'].includes(status.status)) {
+        return status
+      }
+
+      setCheckoutMessage(status.message || 'Заказ создаётся, ожидаем обработку события...')
+      await sleep(1000)
+    }
+
+    return lastStatus
+  }
+
   async function handleConfirmOrder(event) {
     event.preventDefault()
 
     try {
       setSubmitting(true)
       setError('')
+      setCheckoutMessage('Отправляем checkout request...')
 
-      const order = await createOrder({
+      const checkoutRequest = await requestCartCheckout({
         delivery_method: deliveryMethod,
         payment_method: paymentMethod,
       })
 
-      const checkout = await createCheckoutSession(order.id)
-      window.location.href = checkout.checkout_url
+      setCheckoutMessage('Checkout request принят. Ожидаем создание заказа и Stripe-сессии...')
+
+      const checkoutStatus = await waitForCheckoutStatus(checkoutRequest.cart_id)
+
+      if (checkoutStatus?.checkout_url) {
+        window.location.href = checkoutStatus.checkout_url
+        return
+      }
+
+      if (checkoutStatus?.order_id) {
+        setError(
+          'Заказ создан, но Stripe-ссылка пока не готова. Проверь STRIPE_SECRET_KEY или используй sandbox-pay для заказа.',
+        )
+        setCheckoutMessage(`Order ID: ${checkoutStatus.order_id}`)
+        return
+      }
+
+      setError('Не удалось дождаться создания заказа. Проверь kafka-consumer и backend logs.')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -87,6 +143,7 @@ export default function CheckoutPage() {
       </div>
 
       {error && <div className="alert error">{error}</div>}
+      {checkoutMessage && <div className="alert success">{checkoutMessage}</div>}
 
       {items.length === 0 ? (
         <EmptyState
@@ -103,7 +160,9 @@ export default function CheckoutPage() {
                   <div className="checkout-item-row" key={item.id}>
                     <div>
                       <strong>{item.item_title}</strong>
-                      <p className="muted">{item.rent_start} — {item.rent_end}, {item.days_count} дн.</p>
+                      <p className="muted">
+                        {item.rent_start} — {item.rent_end}, {item.days_count} дн.
+                      </p>
                     </div>
                     <strong>{money(item.line_total_cents)}</strong>
                   </div>
@@ -171,7 +230,7 @@ export default function CheckoutPage() {
             </div>
 
             <button className="button" type="submit" disabled={submitting}>
-              {submitting ? 'Создаём заказ...' : 'Подтвердить заказ'}
+              {submitting ? 'Ожидаем checkout...' : 'Подтвердить заказ'}
             </button>
           </aside>
         </form>

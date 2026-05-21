@@ -6,8 +6,10 @@ function getToken() {
 
 async function request(path, options = {}, withAuth = false) {
   const headers = new Headers(options.headers || {})
+  const hasBody = options.body !== undefined && options.body !== null
+  const isFormData = options.body instanceof FormData
 
-  if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+  if (hasBody && !isFormData && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 
@@ -21,9 +23,14 @@ async function request(path, options = {}, withAuth = false) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
+    cache: 'no-store',
   })
 
   if (response.status === 204) {
+    return null
+  }
+
+  if (response.status === 304) {
     return null
   }
 

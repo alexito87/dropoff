@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
+from app.core.admin import require_admin
 from app.modules.payments.models.payment import (
     Payment,
     PaymentTransaction,
@@ -13,15 +14,6 @@ from app.modules.payments.models.payment import (
 from app.modules.users.models.user import User
 
 router = APIRouter()
-
-
-def _is_admin(user: User) -> bool:
-    return bool(getattr(user, "is_superuser", False))
-
-
-def _assert_admin(current_user: User) -> None:
-    if not _is_admin(current_user):
-        raise HTTPException(status_code=403, detail="Only admin can manage payments")
 
 
 def _payment_to_dict(payment: Payment) -> dict:
@@ -132,7 +124,7 @@ def read_all_payments_as_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    _assert_admin(current_user)
+    require_admin(current_user)
 
     payments = (
         db.query(Payment)
@@ -152,7 +144,7 @@ def read_payment_as_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    _assert_admin(current_user)
+    require_admin(current_user)
 
     payment = db.query(Payment).filter(Payment.id == payment_id).first()
 
@@ -168,7 +160,7 @@ def read_order_payments_as_admin(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    _assert_admin(current_user)
+    require_admin(current_user)
 
     payments = (
         db.query(Payment)

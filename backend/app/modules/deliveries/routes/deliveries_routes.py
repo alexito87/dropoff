@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.events.delivery_events import (
+    add_delivery_cancelled_event_to_outbox,
     add_delivery_completed_event_to_outbox,
     add_delivery_created_event_to_outbox,
     add_delivery_return_requested_event_to_outbox,
@@ -94,7 +95,9 @@ def _sync_order_status_after_item_change(db: Session, order: Order) -> None:
         order.status = "active"
     elif "return_requested" in statuses:
         order.status = "return_requested"
-    elif "delivery_in_progress" in statuses:
+    elif "delivery_cancelled" in statuses:
+        order.status = "delivery_cancelled"
+    elif "delivery_in_progress" in statuses or "in_delivery" in statuses:
         order.status = "delivery_in_progress"
 
     order.updated_at = _now()
@@ -386,6 +389,86 @@ def request_delivery_return(
             "item_title": item.title if item else "",
             "status": "return_requested",
             "reason": payload.reason,
+        },
+    )
+
+    db.commit()
+    db.refresh(delivery)
+
+    return delivery
+
+
+@router.post("/{delivery_id}/cancel", response_model=DeliveryRead)
+def cancel_delivery(
+    delivery_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    delivery = _get_delivery_or_404(db, delivery_id)
+
+    _ensure_delivery_access(delivery, current_user)
+
+    if delivery.owner_id != current_user.id and not _is_admin(current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Only owner or admin can cancel delivery",
+        )
+
+    if delivery.status not in {"in_progress", "return_requested"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Only in_progress or return_requested delivery can be cancelled",
+        )
+
+    order_item = _get_order_item_or_404(db, delivery.order_item_id)
+    order = _get_order_or_404(db, delivery.order_id)
+    item = db.query(Item).filter(Item.id == delivery.item_id).first()
+
+    now = _now()
+
+    delivery.status = "cancelled"
+    delivery.finished_at = delivery.finished_at or now
+    delivery.updated_at = now
+
+    order_item.status = "delivery_cancelled"
+    order_item.updated_at = now
+
+    _sync_order_status_after_item_change(db, order)
+
+    db.add(delivery)
+    db.add(order_item)
+    db.add(order)
+    db.flush()
+
+    add_delivery_cancelled_event_to_outbox(
+        db,
+        delivery=delivery,
+        actor_user_id=current_user.id,
+    )
+
+    _create_notification(
+        db,
+        delivery.renter_id,
+        "delivery_cancelled",
+        {
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "item_id": str(delivery.item_id),
+            "item_title": item.title if item else "",
+            "status": "delivery_cancelled",
+        },
+    )
+
+    _create_notification(
+        db,
+        delivery.owner_id,
+        "delivery_cancelled",
+        {
+            "order_id": str(order.id),
+            "order_item_id": str(order_item.id),
+            "item_id": str(delivery.item_id),
+            "item_title": item.title if item else "",
+            "status": "delivery_cancelled",
         },
     )
 

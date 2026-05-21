@@ -1,12 +1,13 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, get_db
 from app.core.admin import is_admin, require_admin
 from app.events.cart_events import (
+    add_cart_checkout_requested_event_to_outbox,
     add_cart_cleared_event_to_outbox,
     add_cart_item_added_event_to_outbox,
     add_cart_item_removed_event_to_outbox,
@@ -15,14 +16,24 @@ from app.models.item_image import ItemImage
 from app.models.rental import Rental
 from app.modules.items.models.item import Item
 from app.modules.orders.models.cart import Cart, CartItem
+from app.modules.orders.models.order import Order
 from app.modules.orders.schemas.cart import (
     CartItemCreate,
     CartItemRead,
     CartRead,
 )
+from app.modules.orders.schemas.order import OrderCreate
+from app.modules.payments.models.payment import Payment, StripeCheckoutSession
 from app.modules.users.models.user import User
 
 router = APIRouter()
+
+DELIVERY_METHODS = {
+    "pickup": 0,
+    "courier_standard": 1200,
+}
+
+SUPPORTED_PAYMENT_METHODS = {"stripe_checkout"}
 
 
 def _now():
@@ -178,7 +189,7 @@ def _add_item_to_cart_for_user(
     if item.owner_id == target_user.id and not is_admin(actor_user):
         raise HTTPException(status_code=400, detail="You cannot add your own item to cart")
 
-    if payload.end_date < payload.start_date:
+    if payload.rent_end < payload.rent_start:
         raise HTTPException(status_code=400, detail="End date cannot be earlier than start date")
 
     if _has_unavailable_overlap(db, item.id, payload.rent_start, payload.rent_end):
@@ -305,6 +316,137 @@ def add_item_to_cart(
     db.refresh(cart)
 
     return _cart_to_read(db, cart)
+
+
+@router.post("/checkout-request", status_code=status.HTTP_202_ACCEPTED)
+def request_cart_checkout(
+    payload: OrderCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if payload.delivery_method not in DELIVERY_METHODS:
+        raise HTTPException(status_code=400, detail="Unsupported delivery method")
+
+    if payload.payment_method not in SUPPORTED_PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail="For MVP only stripe_checkout is supported",
+        )
+
+    cart = (
+        db.query(Cart)
+        .filter(Cart.user_id == current_user.id, Cart.status == "active")
+        .with_for_update()
+        .first()
+    )
+
+    if not cart:
+        raise HTTPException(status_code=400, detail="Active cart is empty")
+
+    cart_items_count = db.query(CartItem).filter(CartItem.cart_id == cart.id).count()
+
+    if cart_items_count == 0:
+        raise HTTPException(status_code=400, detail="Active cart is empty")
+
+    add_cart_checkout_requested_event_to_outbox(
+        db,
+        cart=cart,
+        user_id=current_user.id,
+        delivery_method=payload.delivery_method,
+        payment_method=payload.payment_method,
+    )
+
+    db.commit()
+
+    return {
+        "accepted": True,
+        "event_type": "cart.checkout_requested",
+        "cart_id": str(cart.id),
+        "cart_status": cart.status,
+        "message": "Checkout request accepted. Order will be created by event consumer.",
+    }
+
+
+@router.get("/checkout-status")
+def read_cart_checkout_status(
+    cart_id: UUID = Query(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    cart = _get_cart_or_404(db, cart_id)
+
+    _assert_cart_access(cart, current_user)
+
+    order = (
+        db.query(Order)
+        .filter(Order.cart_id == cart.id)
+        .order_by(Order.created_at.desc())
+        .first()
+    )
+
+    if not order:
+        return {
+            "status": "processing",
+            "cart_id": str(cart.id),
+            "cart_status": cart.status,
+            "order_id": None,
+            "order_status": None,
+            "payment_id": None,
+            "payment_status": None,
+            "stripe_checkout_session_id": None,
+            "checkout_url": None,
+            "message": "Checkout request is still being processed.",
+        }
+
+    payment = (
+        db.query(Payment)
+        .filter(Payment.order_id == order.id)
+        .order_by(Payment.created_at.desc())
+        .first()
+    )
+
+    checkout_session = None
+
+    if payment:
+        checkout_session = (
+            db.query(StripeCheckoutSession)
+            .filter(StripeCheckoutSession.payment_id == payment.id)
+            .order_by(StripeCheckoutSession.created_at.desc())
+            .first()
+        )
+
+    checkout_url = checkout_session.checkout_url if checkout_session else None
+    stripe_checkout_session_id = (
+        checkout_session.provider_session_id
+        if checkout_session
+        else order.stripe_checkout_session_id
+    )
+
+    if checkout_url:
+        status_value = "checkout_ready"
+        message = "Checkout session is ready."
+    elif payment and payment.status in {"failed", "expired", "cancelled"}:
+        status_value = "payment_failed"
+        message = f"Payment is {payment.status}."
+    elif checkout_session and checkout_session.status == "failed":
+        status_value = "checkout_failed"
+        message = "Checkout session creation failed."
+    else:
+        status_value = "order_created"
+        message = "Order was created, checkout session is not ready yet."
+
+    return {
+        "status": status_value,
+        "cart_id": str(cart.id),
+        "cart_status": cart.status,
+        "order_id": str(order.id),
+        "order_status": order.status,
+        "payment_id": str(payment.id) if payment else None,
+        "payment_status": payment.status if payment else None,
+        "stripe_checkout_session_id": stripe_checkout_session_id,
+        "checkout_url": checkout_url,
+        "message": message,
+    }
 
 
 @router.delete("/items/{cart_item_id}", response_model=CartRead)

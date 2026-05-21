@@ -4,6 +4,7 @@ from app.modules.admin.index import router as admin_router
 from app.modules.auth.index import router as auth_router
 from app.modules.catalog.index import router as catalog_router
 from app.modules.deliveries.index import router as deliveries_router
+from app.modules.events.index import router as events_router
 from app.modules.items.index import router as items_router
 from app.modules.notifications.index import router as notifications_router
 from app.modules.orders.index import router as orders_router
@@ -25,4 +26,5 @@ def register_modules(app: FastAPI) -> None:
     app.include_router(orders_router, prefix=API_V1_PREFIX)
     app.include_router(deliveries_router, prefix=API_V1_PREFIX)
     app.include_router(payments_router, prefix=API_V1_PREFIX)
+    app.include_router(events_router, prefix=API_V1_PREFIX)
     app.include_router(admin_router, prefix=API_V1_PREFIX)

@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.events.business_processes import apply_moderation_event_to_item
 from app.events.handlers.base import (
     EventHandlingResult,
     log_event_received,
@@ -9,7 +10,12 @@ from app.events.handlers.base import (
     require_data_fields,
     require_event_fields,
 )
-from app.events.projection_utils import apply_values, get_event_data, get_or_create_projection, source_fields
+from app.events.projection_utils import (
+    apply_values,
+    get_event_data,
+    get_or_create_projection,
+    source_fields,
+)
 from app.models.event_projection import ModerationItemProjection
 
 
@@ -46,9 +52,12 @@ def handle_moderation_item_approved(db: Session, event: dict[str, Any]) -> Event
 
     _upsert_moderation_item_projection(db, event)
 
+    business_result = apply_moderation_event_to_item(db, event)
+
     return processed(
-        "Moderation approved event projected to moderation item projection",
-        target_contexts=["moderation"],
+        "Moderation approved event projected and applied to item",
+        target_contexts=["moderation", "items", "notifications"],
+        business_result=business_result,
     )
 
 
@@ -60,9 +69,12 @@ def handle_moderation_item_rejected(db: Session, event: dict[str, Any]) -> Event
 
     _upsert_moderation_item_projection(db, event)
 
+    business_result = apply_moderation_event_to_item(db, event)
+
     return processed(
-        "Moderation rejected event projected to moderation item projection",
-        target_contexts=["moderation"],
+        "Moderation rejected event projected and applied to item",
+        target_contexts=["moderation", "items", "notifications"],
+        business_result=business_result,
     )
 
 
@@ -74,7 +86,10 @@ def handle_moderation_item_needs_changes(db: Session, event: dict[str, Any]) -> 
 
     _upsert_moderation_item_projection(db, event)
 
+    business_result = apply_moderation_event_to_item(db, event)
+
     return processed(
-        "Moderation needs changes event projected to moderation item projection",
-        target_contexts=["moderation"],
+        "Moderation needs changes event projected and applied to item",
+        target_contexts=["moderation", "items", "notifications"],
+        business_result=business_result,
     )
