@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import EmptyState from "../components/common/EmptyState";
-import { getCatalogItems } from "../api/catalog";
-import { apiGet } from "../api/client";
+import { getCatalogItems, getPublicCategories } from "../api/catalog";
 
 const DEFAULT_FILTERS = {
   city: "",
@@ -33,7 +32,7 @@ export default function CatalogPage() {
     async function loadCategories() {
       try {
         setCategoriesLoading(true);
-        const data = await apiGet("/api/v1/categories");
+        const data = await getPublicCategories();
         setCategories(data);
       } catch (e) {
         setError(e.message);

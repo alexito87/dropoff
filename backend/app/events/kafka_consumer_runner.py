@@ -372,6 +372,7 @@ async def run_kafka_consumer_loop(
                                     error_message=str(decode_error),
                                 )
 
+                                db.commit()
                                 await consumer.commit()
                                 continue
 
@@ -385,6 +386,9 @@ async def run_kafka_consumer_loop(
                                 payload=payload,
                             )
 
+                            db.commit()
+                            await consumer.commit()
+
                             logger.info(
                                 "Kafka event processed by business dispatcher: consumer=%s topic=%s partition=%s offset=%s status=%s event_type=%s event_id=%s",
                                 consumer_config.name,
@@ -396,9 +400,9 @@ async def run_kafka_consumer_loop(
                                 payload.get("event_id"),
                             )
 
-                            await consumer.commit()
-
                         except Exception as exc:
+                            db.rollback()
+
                             logger.exception(
                                 "Kafka consumer failed to process event: consumer=%s topic=%s partition=%s offset=%s",
                                 consumer_config.name,
@@ -407,18 +411,18 @@ async def run_kafka_consumer_loop(
                                 message.offset,
                             )
 
-                            with contextlib.suppress(Exception):
-                                payload_for_failed_record = (
-                                    payload
-                                    if "payload" in locals() and isinstance(payload, dict)
-                                    else _build_decode_error_payload(
-                                        topic=message.topic,
-                                        partition=message.partition,
-                                        offset=message.offset,
-                                        error=exc,
-                                    )
+                            payload_for_failed_record = (
+                                payload
+                                if "payload" in locals() and isinstance(payload, dict)
+                                else _build_decode_error_payload(
+                                    topic=message.topic,
+                                    partition=message.partition,
+                                    offset=message.offset,
+                                    error=exc,
                                 )
+                            )
 
+                            try:
                                 _record_failed_event_to_dlq(
                                     db=db,
                                     consumer_name=consumer_config.name,
@@ -443,7 +447,17 @@ async def run_kafka_consumer_loop(
                                     error_message=str(exc),
                                 )
 
+                                db.commit()
                                 await consumer.commit()
+                            except Exception:
+                                db.rollback()
+                                logger.exception(
+                                    "Kafka consumer failed to record failed event. Kafka offset was not committed: consumer=%s topic=%s partition=%s offset=%s",
+                                    consumer_config.name,
+                                    message.topic,
+                                    message.partition,
+                                    message.offset,
+                                )
 
                         finally:
                             db.close()

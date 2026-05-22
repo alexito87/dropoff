@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     outbox_publisher_interval_seconds: float = 5.0
     outbox_publisher_batch_size: int = 25
 
+    rabbitmq_url: str = "amqp://guest:guest@rabbitmq:5672/"
+    rabbitmq_enabled: bool = True
+    rabbitmq_email_exchange: str = "dropoff.email.exchange"
+    rabbitmq_email_queue: str = "dropoff.email.send"
+    rabbitmq_email_retry_queue: str = "dropoff.email.retry"
+    rabbitmq_email_dlq: str = "dropoff.email.dlq"
+    rabbitmq_email_routing_key: str = "email.send"
+    rabbitmq_email_retry_routing_key: str = "email.retry"
+    rabbitmq_email_dlq_routing_key: str = "email.dlq"
+    rabbitmq_email_retry_delay_ms: int = 30000
+    rabbitmq_email_max_attempts: int = 3
+
     cache_ttl_categories_seconds: int = 3600
     cache_ttl_item_details_seconds: int = 300
     cache_ttl_listing_details_seconds: int = 300
@@ -168,6 +180,62 @@ class Settings(BaseSettings):
     @property
     def OUTBOX_PUBLISHER_BATCH_SIZE(self) -> int:
         return self.outbox_publisher_batch_size
+
+    @property
+    def RABBITMQ_URL(self) -> str:
+        return self.rabbitmq_url
+
+    @property
+    def RABBITMQ_ENABLED(self) -> bool:
+        return self.rabbitmq_enabled
+
+    @property
+    def RABBITMQ_EMAIL_EXCHANGE(self) -> str:
+        return self.rabbitmq_email_exchange
+
+    @property
+    def RABBITMQ_EMAIL_QUEUE(self) -> str:
+        return self.rabbitmq_email_queue
+
+    @property
+    def RABBITMQ_EMAIL_RETRY_QUEUE(self) -> str:
+        return self.rabbitmq_email_retry_queue
+
+    @property
+    def RABBITMQ_EMAIL_DLQ(self) -> str:
+        return self.rabbitmq_email_dlq
+
+    @property
+    def RABBITMQ_EMAIL_ROUTING_KEY(self) -> str:
+        return self.rabbitmq_email_routing_key
+
+    @property
+    def RABBITMQ_EMAIL_RETRY_ROUTING_KEY(self) -> str:
+        return self.rabbitmq_email_retry_routing_key
+
+    @property
+    def RABBITMQ_EMAIL_DLQ_ROUTING_KEY(self) -> str:
+        return self.rabbitmq_email_dlq_routing_key
+
+    @property
+    def RABBITMQ_EMAIL_RETRY_DELAY_MS(self) -> int:
+        return self.rabbitmq_email_retry_delay_ms
+
+    @property
+    def RABBITMQ_EMAIL_MAX_ATTEMPTS(self) -> int:
+        return self.rabbitmq_email_max_attempts
+
+    @property
+    def SMTP_HOST(self) -> str:
+        return self.smtp_host
+
+    @property
+    def SMTP_PORT(self) -> int:
+        return self.smtp_port
+
+    @property
+    def SMTP_FROM(self) -> str:
+        return self.smtp_from
 
     @property
     def CACHE_TTL_CATEGORIES_SECONDS(self) -> int:

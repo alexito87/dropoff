@@ -45,6 +45,19 @@ def _ensure_category_name_unique(
         raise HTTPException(status_code=400, detail="Category with this name already exists")
 
 
+@router.get("/categories", response_model=list[CategoryRead])
+def read_public_categories(
+    db: Session = Depends(get_db),
+):
+    categories = (
+        db.query(Category)
+        .order_by(Category.name.asc())
+        .all()
+    )
+
+    return categories
+
+
 @router.get("/admin/categories", response_model=list[CategoryRead])
 def read_all_categories_as_admin(
     current_user: User = Depends(get_current_user),

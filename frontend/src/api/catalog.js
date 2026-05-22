@@ -22,3 +22,7 @@ export function getCatalogItems(params = {}) {
 export function getCatalogItemDetails(itemId) {
   return apiGet(`/api/v1/catalog/items/${itemId}`);
 }
+
+export function getPublicCategories() {
+  return apiGet("/api/v1/catalog/categories");
+}

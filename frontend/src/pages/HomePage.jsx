@@ -15,7 +15,7 @@ export default function HomePage() {
           <li>Открывается frontend на localhost:3000.</li>
           <li>Открывается Swagger на localhost:8000/docs.</li>
           <li>Работает GET /api/v1/health-check.</li>
-          <li>После миграции и seed работает GET /api/v1/categories.</li>
+          <li>После миграции и seed работает GET /api/v1/catalog/categories.</li>
         </ol>
       </div>
     </section>

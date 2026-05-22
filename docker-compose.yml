@@ -17,6 +17,19 @@ services:
     container_name: rental-marketplace-redis
     restart: unless-stopped
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rental-marketplace-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # основной брокер
+      - "15780:15672"  # Management UI, изменен порт с 15673 на 15674
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - dropoff_rabbitmq_data:/var/lib/rabbitmq
+
   kafka:
     image: apache/kafka:4.1.1
     container_name: rental-marketplace-kafka
@@ -63,9 +76,11 @@ services:
       - redis
       - mailpit
       - kafka
+      - rabbitmq
     environment:
       BACKEND_CORS_ORIGINS: http://localhost:3000,http://localhost:4000,http://127.0.0.1:4000
-      FRONTEND_URL: http://localhost:4000=value
+      FRONTEND_URL: http://localhost:4000
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
     ports:
       - "8000:8000"
     volumes:
@@ -82,6 +97,30 @@ services:
     depends_on:
       - db
       - kafka
+      - rabbitmq
+      - mailpit
+    environment:
+      FRONTEND_URL: http://localhost:4000
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    volumes:
+      - ./backend:/app
+
+  email-worker:
+    build:
+      context: ./backend
+    container_name: rental-marketplace-email-worker
+    restart: unless-stopped
+    command: python -m app.email.worker
+    env_file:
+      - ./.env
+    depends_on:
+      - rabbitmq
+      - mailpit
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: no-reply@dropoff.local
     volumes:
       - ./backend:/app
 
@@ -93,7 +132,7 @@ services:
     depends_on:
       - backend
     environment:
-      VITE_API_BASE_URL: http://localhost:8000 
+      VITE_API_BASE_URL: http://localhost:8000
     ports:
       - "4000:3000"
     volumes:
@@ -125,3 +164,4 @@ volumes:
   dropoff_postgres_data:
   dropoff_pgadmin_data:
   dropoff_kafka_data:
+  dropoff_rabbitmq_data:

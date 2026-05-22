@@ -1,7 +1,6 @@
 import logging
 from typing import Any
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.consumed_kafka_event import ConsumedKafkaEvent
@@ -41,6 +40,27 @@ def record_consumed_kafka_event(
     status: str = "processed",
     error_message: str | None = None,
 ) -> ConsumedKafkaEvent | None:
+    existing_event = (
+        db.query(ConsumedKafkaEvent)
+        .filter(
+            ConsumedKafkaEvent.consumer_name == consumer_name,
+            ConsumedKafkaEvent.topic == topic,
+            ConsumedKafkaEvent.partition == partition,
+            ConsumedKafkaEvent.offset == offset,
+        )
+        .first()
+    )
+
+    if existing_event:
+        logger.info(
+            "Kafka event already consumed: consumer=%s topic=%s partition=%s offset=%s",
+            consumer_name,
+            topic,
+            partition,
+            offset,
+        )
+        return existing_event
+
     consumed_event = ConsumedKafkaEvent(
         consumer_name=consumer_name,
         topic=topic,
@@ -57,21 +77,6 @@ def record_consumed_kafka_event(
     )
 
     db.add(consumed_event)
+    db.flush()
 
-    try:
-        db.commit()
-        db.refresh(consumed_event)
-        return consumed_event
-    except IntegrityError:
-        db.rollback()
-        logger.info(
-            "Kafka event already consumed: consumer=%s topic=%s partition=%s offset=%s",
-            consumer_name,
-            topic,
-            partition,
-            offset,
-        )
-        return None
-    except Exception:
-        db.rollback()
-        raise
+    return consumed_event

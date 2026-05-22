@@ -1,9 +1,12 @@
+import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.email.publisher import enqueue_notification_email
 from app.events.handlers.base import (
     EventHandlingResult,
+    failed,
     log_event_received,
     processed,
     require_data_fields,
@@ -11,6 +14,8 @@ from app.events.handlers.base import (
 )
 from app.events.projection_utils import get_event_data
 from app.models.event_projection import AuditDomainEventProjection
+
+logger = logging.getLogger(__name__)
 
 
 def handle_notification_created(db: Session, event: dict[str, Any]) -> EventHandlingResult:
@@ -42,7 +47,34 @@ def handle_notification_created(db: Session, event: dict[str, Any]) -> EventHand
             )
         )
 
+    try:
+        email_result = enqueue_notification_email(
+            db,
+            notification_id=str(data["notification_id"]),
+            user_id=str(data["user_id"]),
+            notification_type=str(data["type"]),
+            payload=data.get("payload") or {},
+            correlation_id=event.get("correlation_id"),
+            causation_id=event.get("event_id"),
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "Failed to publish notification email message to RabbitMQ: notification_id=%s event_id=%s",
+            data.get("notification_id"),
+            event.get("event_id"),
+        )
+
+        return failed(
+            "Notification was projected, but email message was not published to RabbitMQ",
+            target_contexts=["audit", "email"],
+            notification_id=data.get("notification_id"),
+            error_message=str(exc),
+        )
+
     return processed(
-        "Notification created event projected to audit domain event projection",
-        target_contexts=["audit"],
+        "Notification created event projected and email message queued",
+        target_contexts=["audit", "email"],
+        notification_id=data.get("notification_id"),
+        email=email_result,
     )
