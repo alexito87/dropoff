@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { getPublicCategories } from '../api/catalog'
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload } from '../api/client'
 
 const ACCEPTED_TYPES = ['image/jpeg', 'image/png', 'image/webp']
@@ -33,7 +34,7 @@ export default function ItemFormPage() {
 
   useEffect(() => {
     async function bootstrap() {
-      const categoriesData = await apiGet('/api/v1/categories')
+      const categoriesData = await getPublicCategories()
       setCategories(categoriesData)
 
       if (isEdit) {

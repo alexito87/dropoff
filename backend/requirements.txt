@@ -12,3 +12,4 @@ supabase
 redis[hiredis]
 stripe
 aiokafka
+pika
