@@ -1,7 +1,7 @@
 
 # dropoff
 
-MVP rental marketplace.
+Drop-off application.
 
 ## Local start
 
